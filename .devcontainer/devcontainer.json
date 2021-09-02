@@ -26,7 +26,8 @@
     "serayuzgur.crates",
     "DavidAnson.vscode-markdownlint",
     "esbenp.prettier-vscode",
-    "albert.tabout"
+    "albert.tabout",
+    "eamodio.gitlens"
   ],
 
   // Use 'forwardPorts' to make a list of ports inside the container available locally.
