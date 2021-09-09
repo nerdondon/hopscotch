@@ -118,6 +118,11 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
     pub fn len(&self) -> u64 {
         self.length
     }
+
+    /// Returns true if the skip list does not hold any elements; otherwise false.
+    pub fn is_empty(&self) -> bool {
+        self.length > 0
+    }
 }
 
 // Private methods of SkipList
