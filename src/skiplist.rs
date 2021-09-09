@@ -30,7 +30,7 @@ impl<K: Ord + Hash, V: Clone> SkipNode<K, V> {
     }
 }
 
-struct SkipList<K: Ord + Hash, V: Clone> {
+pub struct SkipList<K: Ord + Hash, V: Clone> {
     head: Link<K, V>,
     length: u64,
     /// The probability of success used in probability distribution for determining height of a new
@@ -46,7 +46,7 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
     ///
     /// `probability` is the probability of success used in probability distribution for determining
     /// height of a new node. Defaults to 0.25.
-    fn new(probability: Option<f64>) -> Self {
+    pub fn new(probability: Option<f64>) -> Self {
         let head = SkipNode::head();
         SkipList {
             head: Some(Rc::new(RefCell::new(head))),
