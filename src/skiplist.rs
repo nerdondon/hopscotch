@@ -7,7 +7,9 @@ use std::rc::{Rc, Weak};
 type Link<K, V> = Option<Rc<RefCell<SkipNode<K, V>>>>;
 
 struct SkipNode<K: Ord + Hash, V: Clone> {
+    /// The key should only be `None` for the `head` node.
     key: Option<K>,
+    /// The Value should only be `None` for the `head` node.
     value: Option<V>,
     levels: Vec<Link<K, V>>,
 }
@@ -56,19 +58,19 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
         }
     }
 
-    /// Get an immutable reference to the value with `key` from within the skip list.
+    /// Get an immutable reference to the value corresponding to the `key`.
     ///
     /// Returns `Some(V)` if found and `None` if not
     pub fn get(&self, key: &K) -> Option<V> {
         let mut wrapped_current_node = self.head.as_ref().map(Rc::clone);
 
         // Start iteration at the top of the skip list "towers"
-        for levelIdx in (0..self.height as usize).rev() {
+        for level_idx in (0..self.height()).rev() {
             // Iterate through pointers at the current level. If we skipped past our key, move down
             // a level.
             while wrapped_current_node.is_some() {
                 // Move the pointer forward
-                wrapped_current_node = wrapped_current_node.unwrap().borrow().levels[levelIdx]
+                wrapped_current_node = wrapped_current_node.unwrap().borrow().levels[level_idx]
                     .as_ref()
                     .map(Rc::clone);
 
@@ -78,24 +80,22 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
                 // `Option` from the existing one.
                 let current_node = wrapped_current_node.take().unwrap();
                 let borrowed_node = current_node.borrow();
-                /* let mut wrapped_next_node = current_node.unwrap().borrow().levels[levelIdx]
-                    .as_ref()
-                    .map(Rc::clone);
-                let borrowed_next_node = next_node.borrow(); */
                 match borrowed_node.key.as_ref().unwrap().cmp(key) {
                     std::cmp::Ordering::Less => {
                         wrapped_current_node =
-                            borrowed_node.levels[levelIdx].as_ref().map(Rc::clone);
+                            borrowed_node.levels[level_idx].as_ref().map(Rc::clone);
                     }
                     _ => break,
                 }
             }
         }
 
-        let potential_record = wrapped_current_node.unwrap().borrow().levels[0];
+        let potential_record = wrapped_current_node.unwrap().borrow().levels[0]
+            .as_ref()
+            .map(Rc::clone);
 
         match potential_record {
-            Some(node) => node.borrow().value.map(|val| val.clone()),
+            Some(ref node) => node.borrow().value.as_ref().cloned(),
             None => None,
         }
     }
@@ -103,7 +103,7 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
     /// Get a mutable reference to the value with `key` from within the skip list.
     ///
     /// Returns `Some(V)` if found and `None` if not
-    pub fn get_mut(&self, key: K) -> Option<V> {
+    pub fn get_mut(&self, key: &K) -> Option<V> {
         // TODO: Figure out a better way to do `get` and `get_mut` rather than having so much duplicate code.
         None
     }
