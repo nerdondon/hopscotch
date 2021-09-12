@@ -121,7 +121,8 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
 
     /// Returns true if the skip list does not hold any elements; otherwise false.
     pub fn is_empty(&self) -> bool {
-        self.length > 0
+        self.length == 0
+    }
     }
 }
 
