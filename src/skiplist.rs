@@ -127,8 +127,13 @@ impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
 }
 
 // Private methods of SkipList
-impl<K: Ord + Hash, V: Clone> SkipList<K, V> {
-    fn randomHeight(&self) -> u64 {
+    /// The current maximum height of the skip list.
+    fn height(&self) -> usize {
+        self.head.as_ref().unwrap().borrow().levels.len()
+    }
+
+    /// Generates a random height according to a geometric distribution.
+    fn random_height(&self) -> usize {
         let mut rng = thread_rng();
         let distribution = Geometric::new(self.probability).unwrap();
         let sample = distribution.sample(&mut rng);
