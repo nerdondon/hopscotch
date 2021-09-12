@@ -1,3 +1,5 @@
+pub mod skiplist;
+
 #[cfg(test)]
 mod tests {
     #[test]
