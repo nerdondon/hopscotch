@@ -105,7 +105,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Get a mutable reference to the value corresponding to the specified `key`.
     ///
     /// Returns `Some(V)` if found and `None` if not
-    pub fn get_mut(&self, key: &K) -> Option<V> {
+    pub fn get_mut(&self, _key: &K) -> Option<V> {
         // TODO: Figure out a better way to do `get` and `get_mut` rather than having so much duplicate code.
         None
     }
@@ -164,7 +164,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     }
 
     /// Remove a key-value pair.
-    pub fn remove(&mut self, key: K, value: V) {}
+    pub fn remove(&mut self, _key: K, _value: V) {}
 
     /// The number of elements in the skip list.
     pub fn len(&self) -> u64 {
