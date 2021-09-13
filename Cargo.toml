@@ -2,8 +2,11 @@
 [package]
 name = "nerdondon-hopscotch"
 authors = ["nerdondon"]
+description = "A skip list"
+repository = "https://github.com/nerdondon/hopscotch"
 version = "0.1.0"
 edition = "2018"
+license = "MIT"
 
 [dependencies]
 rand = "0.8.0"
