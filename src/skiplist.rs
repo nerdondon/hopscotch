@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 type Link<K, V> = Option<Rc<RefCell<SkipNode<K, V>>>>;
@@ -176,6 +177,33 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         self.length == 0
     }
 
+    /// An iterator visiting key-value pairs.
+    /// The iterator element type is `(&'a K, &'a V)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use nerdondon_hopscotch::skiplist::SkipList;
+    ///
+    /// let skiplist = SkipList::<i32, String>::new(None);
+    /// skiplist.insert(1, "a");
+    /// skiplist.insert(2, "b");
+    /// skiplist.insert(3, "c");
+    /// let iter = map.iter();
+    ///
+    /// for (key, val) in map.iter() {
+    ///     println!("key: {} val: {}", key, val);
+    /// }
+    /// ```
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter {
+            next: self.head.as_ref().unwrap().borrow().levels[0]
+                .as_ref()
+                .map(Rc::clone),
+            marker: PhantomData,
+        }
+    }
+
     /// Print out the keys of elements in the skip list.
     pub fn print_keys(&self) {
         let mut node = self.head.as_ref().map(Rc::clone);
@@ -233,6 +261,66 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Increment length by 1.
     fn inc_length(&mut self) {
         self.length += 1;
+    }
+}
+
+/// An iterator over the entries of a `SkipList`.
+///
+/// This `struct` is created by the [`iter`] method.
+///
+/// [`iter`]: SkipList::iter
+///
+/// # Example
+///
+/// ```
+/// use nerdondon_hopscotch::skiplist::SkipList;
+///
+/// let skiplist = SkipList::<i32, String>::new(None);
+/// skiplist.insert(1, "a");
+/// let iter = map.iter();
+/// ```
+struct Iter<'a, K: 'a, V: 'a>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    next: Option<Rc<RefCell<SkipNode<K, V>>>>,
+    marker: PhantomData<(&'a K, &'a V)>,
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<(&'a K, &'a V)> {
+        let wrapped_current_node = self.next.as_ref();
+        if wrapped_current_node.is_none() {
+            return None;
+        }
+
+        let current_node = wrapped_current_node.map(Rc::clone).unwrap();
+        self.next = current_node.borrow().levels[0].as_ref().map(Rc::clone);
+
+        let borrowed_current = current_node.borrow();
+        let key = borrowed_current.key.as_ref().unwrap();
+        let value = borrowed_current.value.as_ref().unwrap();
+        return Some((key, value));
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a SkipList<K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
