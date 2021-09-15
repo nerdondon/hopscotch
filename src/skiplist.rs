@@ -39,7 +39,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipNode<K, V> {
 #[derive(Debug)]
 pub struct SkipList<K: Ord + Hash + Debug, V: Clone> {
     head: Link<K, V>,
-    length: u64,
+    length: usize,
     /// The probability of success used in probability distribution for determining height of a new
     /// node. Defaults to 0.25.
     probability: f64,
@@ -168,7 +168,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     pub fn remove(&mut self, _key: K, _value: V) {}
 
     /// The number of elements in the skip list.
-    pub fn len(&self) -> u64 {
+    pub fn len(&self) -> usize {
         self.length
     }
 
