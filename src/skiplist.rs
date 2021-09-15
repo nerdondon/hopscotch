@@ -50,6 +50,13 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     ///
     /// `probability` is the probability of success used in probability distribution for determining
     /// height of a new node. Defaults to 0.25.
+    ///
+    /// # Examples
+    /// ```
+    /// use nerdondon_hopscotch::skiplist::SkipList;
+    ///
+    /// let skiplist = SkipList::<i32, String>::new(None);
+    /// ```
     pub fn new(probability: Option<f64>) -> Self {
         let head = SkipNode::head();
         SkipList {
@@ -102,15 +109,20 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         }
     }
 
-    /// Get a mutable reference to the value corresponding to the specified `key`.
-    ///
-    /// Returns `Some(V)` if found and `None` if not
-    pub fn get_mut(&self, _key: &K) -> Option<V> {
-        // TODO: Figure out a better way to do `get` and `get_mut` rather than having so much duplicate code.
-        None
-    }
-
     /// Insert a key-value pair.
+    ///
+    /// # Examples
+    /// ```
+    /// use nerdondon_hopscotch::skiplist::SkipList;
+    ///
+    /// let mut skiplist = SkipList::<i32, String>::new(None);
+    /// skiplist.insert(2, "banana".to_string());
+    /// skiplist.insert(3, "orange".to_string());
+    /// skiplist.insert(1, "apple".to_string());
+    ///
+    /// let some_value = skiplist.get(&2).unwrap();
+    /// assert_eq!(some_value, "banana".to_string());
+    /// ```
     pub fn insert(&mut self, key: K, value: V) {
         let new_node_height = self.random_height();
         if new_node_height > self.height() {
