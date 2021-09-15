@@ -336,6 +336,12 @@ mod tests {
     }
 
     #[test]
+    fn with_an_empty_skiplist_is_empty_returns_true() {
+        let skiplist = SkipList::<i32, String>::new(None);
+        assert_eq!(skiplist.is_empty(), true);
+    }
+
+    #[test]
     fn with_an_empty_skiplist_len_returns_zero() {
         let skiplist = SkipList::<i32, String>::new(None);
         assert_eq!(skiplist.len(), 0);
@@ -419,5 +425,15 @@ mod tests {
         let actual_value = skiplist.get(&3).unwrap();
 
         assert_eq!(expected_value, actual_value);
+    }
+
+    #[test]
+    fn with_a_skiplist_with_elements_is_empty_returns_false() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        assert_eq!(skiplist.is_empty(), false);
     }
 }
