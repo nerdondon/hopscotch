@@ -2,6 +2,8 @@
 
 What it says. Cuz it skips.
 
+![CI](https://github.com/nerdondon/hopscotch/actions/workflows/ci.yml/badge.svg)
+
 ## Motivation
 
 Note this is a toy project and is not meant for production usage...yet(?). It's primary purpose will
