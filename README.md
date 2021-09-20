@@ -3,6 +3,7 @@
 What it says. Cuz it skips.
 
 [![Build Status](https://github.com/nerdondon/hopscotch/actions/workflows/ci.yaml/badge.svg)](https://github.com/nerdondon/hopscotch/actions/workflows/ci.yaml)
+[![Crates.io](https://img.shields.io/crates/v/nerdondon-hopscotch?color=orange)](https://crates.io/crates/nerdondon-hopscotch)
 
 ## Motivation
 
