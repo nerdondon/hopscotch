@@ -2,7 +2,7 @@
 
 What it says. Cuz it skips.
 
-![CI](https://github.com/nerdondon/hopscotch/workflows/ci.yml/badge.svg)
+[![Build Status](https://github.com/nerdondon/hopscotch/actions/workflows/ci.yaml/badge.svg)](https://github.com/nerdondon/hopscotch/actions/workflows/ci.yaml)
 
 ## Motivation
 
