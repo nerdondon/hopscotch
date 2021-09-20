@@ -111,8 +111,8 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             let borrowed_record = potential_record.as_ref().unwrap().borrow();
             if borrowed_record.key.as_ref().unwrap().eq(key) {
                 return borrowed_record.value.as_ref().cloned();
+            }
         }
-    }
 
         None
     }
@@ -184,7 +184,76 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     }
 
     /// Remove a key-value pair.
-    pub fn remove(&mut self, _key: K, _value: V) {}
+    ///
+    /// Returns the value at the key if the key was in the map.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Track the end of each level
+        let mut nodes_to_update: Vec<Link<K, V>> = vec![None; self.height()];
+        let mut wrapped_current_node = self.head.as_ref().map(Rc::clone);
+
+        // Start iteration at the top of the skip list "towers" and find the removal position at each
+        // level
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = wrapped_current_node.as_ref().unwrap().borrow().levels
+                [level_idx]
+                .as_ref()
+                .map(Rc::clone);
+
+            while maybe_next_node.is_some() {
+                let current_node = maybe_next_node.unwrap();
+                let borrowed_node = current_node.borrow();
+                match borrowed_node.key.as_ref().unwrap().cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        wrapped_current_node = Some(Rc::clone(&current_node));
+                        maybe_next_node = borrowed_node.levels[level_idx].as_ref().map(Rc::clone);
+                    }
+                    _ => break,
+                }
+            }
+
+            // Keep track of the node we stopped at. This is either the node right before our new
+            // node or end of the level if no lesser node was found.
+            nodes_to_update[level_idx] = wrapped_current_node.as_ref().map(Rc::clone);
+        }
+
+        // Our comparator uses a less than condition so the last node we stopped at might be just in
+        // front of the node we are looking to remove
+        let maybe_found_node = wrapped_current_node.unwrap().borrow().levels[0]
+            .as_ref()
+            .map(Rc::clone)
+            .unwrap();
+        if maybe_found_node.borrow().key.as_ref().unwrap().ne(key) {
+            // No-op if we didn't find the key in the skip list
+            return None;
+        }
+
+        for level_idx in (0..self.height()).rev() {
+            let previous_node = nodes_to_update[level_idx].as_ref().map(Rc::clone).unwrap();
+            let maybe_next_node = previous_node.borrow().levels[level_idx]
+                .as_ref()
+                .map(Rc::clone);
+
+            // If the next pointer of the node we ended at on this level is the node for the search
+            // key, adjust the next pointer to point to the node after the node we are removing.
+            if maybe_next_node.is_some() {
+                let mut borrowed_next_node = maybe_next_node.as_ref().unwrap().borrow_mut();
+                if borrowed_next_node.key.as_ref().unwrap().eq(key) {
+                    previous_node.borrow_mut().levels[level_idx] =
+                        borrowed_next_node.levels[level_idx].take();
+                }
+            }
+        }
+
+        self.dec_length();
+
+        let mutable_found_node = maybe_found_node.borrow_mut();
+        Some(mutable_found_node.value.as_ref().cloned().unwrap())
+    }
 
     /// The number of elements in the skip list.
     pub fn len(&self) -> usize {
@@ -293,6 +362,11 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Increment length by 1.
     fn inc_length(&mut self) {
         self.length += 1;
+    }
+
+    /// Decrement length by 1.
+    fn dec_length(&mut self) {
+        self.length -= 1;
     }
 
     /// An iterator visiting each node
@@ -494,5 +568,85 @@ mod tests {
                 (3, "orange".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn remove_can_remove_an_item_from_the_front_of_the_skip_list() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        let removed_value = skiplist.remove(&1);
+
+        assert_eq!(skiplist.len(), 2);
+        assert_eq!(removed_value.unwrap(), "apple".to_string());
+        assert_eq!(skiplist.get(&1), None);
+        assert_eq!(
+            skiplist.entries(),
+            [(2, "banana".to_string()), (3, "orange".to_string())]
+        );
+    }
+
+    #[test]
+    fn remove_can_remove_an_item_from_the_middle_of_the_skip_list() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        let removed_value = skiplist.remove(&2);
+
+        assert_eq!(skiplist.len(), 2);
+        assert_eq!(removed_value.unwrap(), "banana".to_string());
+        assert_eq!(skiplist.get(&2), None);
+        assert_eq!(
+            skiplist.entries(),
+            [(1, "apple".to_string()), (3, "orange".to_string())]
+        );
+    }
+
+    #[test]
+    fn remove_can_remove_an_item_from_the_back_of_the_skip_list() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        let removed_value = skiplist.remove(&3);
+
+        assert_eq!(skiplist.len(), 2);
+        assert_eq!(removed_value.unwrap(), "orange".to_string());
+        assert_eq!(skiplist.get(&3), None);
+        assert_eq!(
+            skiplist.entries(),
+            [(1, "apple".to_string()), (2, "banana".to_string())]
+        );
+    }
+
+    #[test]
+    fn remove_can_remove_all_elements_from_the_skip_list() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        skiplist.remove(&3);
+        skiplist.remove(&1);
+        skiplist.remove(&2);
+
+        assert_eq!(skiplist.len(), 0);
+        assert_eq!(skiplist.entries(), []);
+    }
+
+    #[test]
+    fn with_an_empty_skiplist_remove_does_nothing() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        assert_eq!(skiplist.is_empty(), true);
+
+        let removed_value = skiplist.remove(&30);
+
+        assert_eq!(skiplist.is_empty(), true);
+        assert_eq!(removed_value, None);
     }
 }
