@@ -55,8 +55,8 @@ jobs:
           command: clippy
           args: -- -D warnings
 
-  release-build:
-    name: Release build
+  build-release:
+    name: Build release profile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
