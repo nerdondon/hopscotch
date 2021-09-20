@@ -99,14 +99,22 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             }
         }
 
+        // The while loop uses a less than comparator and stops at the node that is potentially just
+        // prior to the node we are looking for. We need to move the pointer forward one time and
+        // check we actually arrived at our node or if we hit the end of the levels without finding
+        // anything.
         let potential_record = wrapped_current_node.unwrap().borrow().levels[0]
             .as_ref()
             .map(Rc::clone);
 
-        match potential_record {
-            Some(ref node) => node.borrow().value.as_ref().cloned(),
-            None => None,
+        if potential_record.is_some() {
+            let borrowed_record = potential_record.as_ref().unwrap().borrow();
+            if borrowed_record.key.as_ref().unwrap().eq(key) {
+                return borrowed_record.value.as_ref().cloned();
         }
+    }
+
+        None
     }
 
     /// Insert a key-value pair.
@@ -437,7 +445,19 @@ mod tests {
     }
 
     #[test]
-    fn with_a_skiplist_with_elements_is_empty_returns_false() {
+    fn with_a_non_empty_skiplist_getting_a_non_existent_element_returns_none() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+
+        let actual_value = skiplist.get(&0);
+
+        assert_eq!(None, actual_value);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_is_empty_returns_false() {
         let mut skiplist = SkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
