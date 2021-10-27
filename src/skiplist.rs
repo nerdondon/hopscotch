@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem;
 use std::rc::Rc;
 
 type Link<K, V> = Option<Rc<RefCell<SkipNode<K, V>>>>;
@@ -42,6 +43,8 @@ pub struct SkipList<K: Ord + Hash + Debug, V: Clone> {
     /// The probability of success used in probability distribution for determining height of a new
     /// node. Defaults to 0.25.
     probability: f64,
+    /// Approximate memory used by the skip list in number of bytes.
+    approximate_mem_usage: usize,
 }
 
 // Public methods of SkipList
@@ -59,12 +62,19 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
         let head = SkipNode::head();
-        SkipList {
+        let mut skiplist = SkipList {
             head: Some(Rc::new(RefCell::new(head))),
             /// The number of elements in the skip list.
             length: 0,
             probability: probability.unwrap_or(0.25),
-        }
+            approximate_mem_usage: 0,
+        };
+
+        // TODO: Make size tracking a feature?
+        let size = mem::size_of_val(&skiplist) + mem::size_of::<SkipNode<K, V>>();
+        skiplist.approximate_mem_usage = size;
+
+        skiplist
     }
 
     /// Get an immutable reference to the value corresponding to the specified `key`.
@@ -180,6 +190,13 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             previous_node.unwrap().borrow_mut().levels[level_idx] = Some(Rc::clone(&new_node));
         }
 
+        // Book keeping for size
+        // The additional usage should be from the size of the new node and the size of references
+        // to this new node. This is multiplied by 2 to approximate the storage in the `levels`
+        // vector. `mem::size_of` and `mem::size_of_val` does not actually get the size of vectors
+        // since vectors are allocated to the heap and only a pointer is stored in the field.
+        self.approximate_mem_usage +=
+            mem::size_of::<SkipNode<K, V>>() + (2 * mem::size_of::<Link<K, V>>() * new_node_height);
         self.inc_length();
     }
 
@@ -232,6 +249,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             return None;
         }
 
+        let mut num_nodes_adjusted: usize = 0;
         for level_idx in (0..self.height()).rev() {
             let previous_node = nodes_to_update[level_idx].as_ref().map(Rc::clone).unwrap();
             let maybe_next_node = previous_node.borrow().levels[level_idx]
@@ -245,10 +263,15 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
                 if borrowed_next_node.key.as_ref().unwrap().eq(key) {
                     previous_node.borrow_mut().levels[level_idx] =
                         borrowed_next_node.levels[level_idx].take();
+                    num_nodes_adjusted += 1;
                 }
             }
         }
 
+        // Book keeping for size
+        // See [`Skiplist::insert`] for reasoning behind the approximate usage removed.
+        self.approximate_mem_usage -= mem::size_of::<SkipNode<K, V>>()
+            + (2 * mem::size_of::<Link<K, V>>() * num_nodes_adjusted);
         self.dec_length();
 
         let mutable_found_node = maybe_found_node.borrow_mut();
@@ -280,6 +303,11 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
 
             node = borrowed_node.levels[0].as_ref().map(Rc::clone);
         }
+    }
+
+    /// Get the approximate amount of memory used in number of bytes.
+    pub fn get_approx_mem_usage(&self) -> usize {
+        self.approximate_mem_usage
     }
 }
 
@@ -648,5 +676,43 @@ mod tests {
 
         assert_eq!(skiplist.is_empty(), true);
         assert_eq!(removed_value, None);
+    }
+
+    #[test]
+    fn get_approx_mem_usage_provides_decent_estimates() {
+        // Note that these estimates have only just some basis in reality. We do not attempt to get
+        // too crazy with the estimates. Just make sure the numbers are somewhat sane.
+
+        // Approximated initial usage
+        // size of head node
+        //   = 1 (None) + 1 (None) + 3 (vec pointer) + 0 (empty vec actual size) = 26
+        // size of SkipList = 8 (length) + 8 (probability) + 8 (approx_mem_usage)  = 24
+        let approx_initial_usage: usize = 50;
+
+        // Approximate node size
+        // size of `levels` actually = height of the skiplist * size of `Link`
+        let base_node_usage: usize = mem::size_of::<SkipNode<u16, String>>();
+        let link_size = mem::size_of::<Link<u16, String>>();
+
+        let mut usage_approximation = approx_initial_usage;
+
+        let mut skiplist = SkipList::<u16, String>::new(None);
+        assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
+
+        skiplist.insert(1, "apple".to_string());
+        usage_approximation += base_node_usage + 7 + skiplist.height() * link_size;
+        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+
+        skiplist.insert(2, "banana".to_string());
+        usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
+        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+
+        skiplist.remove(&1);
+        usage_approximation -= base_node_usage + 7 + skiplist.height() * link_size;
+        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+
+        skiplist.remove(&2);
+        usage_approximation -= base_node_usage + 8 + skiplist.height() * link_size;
+        assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
     }
 }
