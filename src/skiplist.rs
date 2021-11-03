@@ -1,13 +1,12 @@
 use rand::thread_rng;
 use rand_distr::{Distribution, Geometric};
-use std::cell::RefCell;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
-use std::rc::Rc;
+use std::ptr::NonNull;
 
-type Link<K, V> = Option<Rc<RefCell<SkipNode<K, V>>>>;
+type Link<K, V> = Option<NonNull<SkipNode<K, V>>>;
 
 #[derive(Debug)]
 struct SkipNode<K: Ord + Hash + Debug, V: Clone> {
@@ -61,9 +60,9 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// let skiplist = SkipList::<i32, String>::new(None);
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
-        let head = SkipNode::head();
+        let mut head = SkipNode::<K, V>::head();
         let mut skiplist = SkipList {
-            head: Some(Rc::new(RefCell::new(head))),
+            head: NonNull::new(&mut head as *mut _),
             /// The number of elements in the skip list.
             length: 0,
             probability: probability.unwrap_or(0.25),
@@ -74,37 +73,46 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         let size = mem::size_of_val(&skiplist) + mem::size_of::<SkipNode<K, V>>();
         skiplist.approximate_mem_usage = size;
 
+        let head_node = unsafe { skiplist.head.as_ref().unwrap().as_ref() };
+        println!("height: {}", head_node.levels.len());
+
         skiplist
     }
 
     /// Get an immutable reference to the value corresponding to the specified `key`.
     ///
     /// Returns `Some(V)` if found and `None` if not
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         if self.is_empty() {
             return None;
         }
 
-        let mut wrapped_current_node = self.head.as_ref().map(Rc::clone);
+        let mut current_node_ptr = self.head.as_ref().unwrap();
 
         // Start iteration at the top of the skip list "towers" and iterate through pointers at the
         // current level. If we skipped past our key, move down a level.
         for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = wrapped_current_node.as_ref().unwrap().borrow().levels
-                [level_idx]
-                .as_ref()
-                .map(Rc::clone);
+            unsafe {
+                /*
+                Get an optional of the next node
 
-            while maybe_next_node.is_some() {
-                let current_node = maybe_next_node.unwrap();
-                let borrowed_node = current_node.borrow();
-                match borrowed_node.key.as_ref().unwrap().cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        wrapped_current_node = Some(Rc::clone(&current_node));
-                        maybe_next_node = borrowed_node.levels[level_idx].as_ref().map(Rc::clone);
+                SAFETY:
+                `current_node_ptr` is initialized with the head node (which always exists) and
+                is only updated with `maybe_next_node` when the next node exists.
+                */
+                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
+
+                while maybe_next_node.is_some() {
+                    let next_node_ptr = maybe_next_node.unwrap();
+                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
+                    let next_node = next_node_ptr.as_ref();
+                    match next_node.key.as_ref().unwrap().cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            current_node_ptr = next_node_ptr;
+                            maybe_next_node = next_node.levels[level_idx].as_ref();
+                        }
+                        _ => break,
                     }
-                    _ => break,
                 }
             }
         }
@@ -113,14 +121,27 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         // prior to the node we are looking for. We need to move the pointer forward one time and
         // check we actually arrived at our node or if we hit the end of the levels without finding
         // anything.
-        let potential_record = wrapped_current_node.unwrap().borrow().levels[0]
-            .as_ref()
-            .map(Rc::clone);
+        let potential_record = unsafe {
+            /*
+            SAFETY:
+            `current_node_ptr` is initialized with the head node (which always exists) and
+            is only updated with `maybe_next_node` when the next node exists.
+            */
+            current_node_ptr.as_ref().levels[0]
+        };
 
         if potential_record.is_some() {
-            let borrowed_record = potential_record.as_ref().unwrap().borrow();
-            if borrowed_record.key.as_ref().unwrap().eq(key) {
-                return borrowed_record.value.as_ref().cloned();
+            let record = unsafe {
+                /*
+                SAFETY:
+                The `is_some` check and `NonNull` ensures that this pointer is valid to be
+                dereferenced.
+                */
+                potential_record.as_ref().unwrap().as_ref()
+            };
+
+            if record.key.as_ref().unwrap().eq(key) {
+                return record.value.as_ref();
             }
         }
 
@@ -147,47 +168,59 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             self.adjust_head(new_node_height);
         }
 
-        // Track the end of each level
-        let mut nodes_to_update: Vec<Link<K, V>> = vec![None; self.height()];
-        let mut wrapped_current_node = self.head.as_ref().map(Rc::clone);
+        // Track where we end on each level
+        let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
+        let mut current_node_ptr = self.head.as_ref().unwrap();
 
         // Start iteration at the top of the skip list "towers" and find the insert position at each
         // level
         for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = wrapped_current_node.as_ref().unwrap().borrow().levels
-                [level_idx]
-                .as_ref()
-                .map(Rc::clone);
+            unsafe {
+                /*
+                Get an optional of the next node
 
-            while maybe_next_node.is_some() {
-                let current_node = maybe_next_node.unwrap();
-                let borrowed_node = current_node.borrow();
-                match borrowed_node.key.as_ref().unwrap().cmp(&key) {
-                    std::cmp::Ordering::Less => {
-                        wrapped_current_node = Some(Rc::clone(&current_node));
-                        maybe_next_node = borrowed_node.levels[level_idx].as_ref().map(Rc::clone);
+                SAFETY:
+                `current_node_ptr` is initialized with the head node (which always exists) and
+                is only updated with `maybe_next_node` when the next node exists.
+                */
+                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
+
+                while maybe_next_node.is_some() {
+                    let next_node_ptr = maybe_next_node.unwrap();
+                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
+                    let next_node = next_node_ptr.as_ref();
+                    match next_node.key.as_ref().unwrap().cmp(&key) {
+                        std::cmp::Ordering::Less => {
+                            current_node_ptr = next_node_ptr;
+                            maybe_next_node = next_node.levels[level_idx].as_ref();
+                        }
+                        _ => break,
                     }
-                    _ => break,
                 }
             }
 
             // Keep track of the node we stopped at. This is either the node right before our new
             // node or end of the level if no lesser node was found.
-            nodes_to_update[level_idx] = wrapped_current_node.as_ref().map(Rc::clone);
+            nodes_to_update[level_idx] = Some(*current_node_ptr);
         }
 
-        let new_node = Rc::new(RefCell::new(SkipNode::new(key, value, new_node_height)));
+        let mut new_node = SkipNode::new(key, value, new_node_height);
         for level_idx in (0..new_node_height).rev() {
-            let previous_node = nodes_to_update[level_idx].as_ref().map(Rc::clone);
+            let previous_node = unsafe {
+                /*
+                SAFETY:
+                `nodes_to_update` is populated above with `current_node_ptr` that are checked for
+                existence.
+                */
+                nodes_to_update[level_idx].as_mut().unwrap().as_mut()
+            };
 
-            // Set the next pointer for this level on the new node i.e. `previous_node`'s next
+            // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
             // node at this level becomes `new_node`'s next node at this level
-            new_node.borrow_mut().levels[level_idx] =
-                previous_node.as_ref().unwrap().borrow_mut().levels[level_idx].take();
+            new_node.levels[level_idx] = previous_node.levels[level_idx].take();
 
             // Set the next pointer of the previous node to the new node
-            previous_node.unwrap().borrow_mut().levels[level_idx] = Some(Rc::clone(&new_node));
+            previous_node.levels[level_idx] = NonNull::new(&mut new_node as *mut _);
         }
 
         // Book keeping for size
@@ -208,61 +241,76 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             return None;
         }
 
-        // Track the end of each level
-        let mut nodes_to_update: Vec<Link<K, V>> = vec![None; self.height()];
-        let mut wrapped_current_node = self.head.as_ref().map(Rc::clone);
+        // Track where we end on each level
+        let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
+        let mut current_node_ptr = self.head.as_ref().unwrap();
 
         // Start iteration at the top of the skip list "towers" and find the removal position at each
         // level
         for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = wrapped_current_node.as_ref().unwrap().borrow().levels
-                [level_idx]
-                .as_ref()
-                .map(Rc::clone);
+            unsafe {
+                /*
+                Get an optional of the next node
 
-            while maybe_next_node.is_some() {
-                let current_node = maybe_next_node.unwrap();
-                let borrowed_node = current_node.borrow();
-                match borrowed_node.key.as_ref().unwrap().cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        wrapped_current_node = Some(Rc::clone(&current_node));
-                        maybe_next_node = borrowed_node.levels[level_idx].as_ref().map(Rc::clone);
+                SAFETY:
+                `current_node_ptr` is initialized with the head node (which always exists) and
+                is only updated with `maybe_next_node` when the next node exists.
+                */
+                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
+
+                while maybe_next_node.is_some() {
+                    let next_node_ptr = maybe_next_node.unwrap();
+                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
+                    let next_node = next_node_ptr.as_ref();
+                    match next_node.key.as_ref().unwrap().cmp(key) {
+                        std::cmp::Ordering::Less => {
+                            current_node_ptr = next_node_ptr;
+                            maybe_next_node = next_node.levels[level_idx].as_ref();
+                        }
+                        _ => break,
                     }
-                    _ => break,
                 }
             }
 
             // Keep track of the node we stopped at. This is either the node right before our new
             // node or end of the level if no lesser node was found.
-            nodes_to_update[level_idx] = wrapped_current_node.as_ref().map(Rc::clone);
+            nodes_to_update[level_idx] = Some(*current_node_ptr);
         }
 
         // Our comparator uses a less than condition so the last node we stopped at might be just in
         // front of the node we are looking to remove
-        let maybe_found_node = wrapped_current_node.unwrap().borrow().levels[0]
-            .as_ref()
-            .map(Rc::clone)
-            .unwrap();
-        if maybe_found_node.borrow().key.as_ref().unwrap().ne(key) {
+        let found_node = unsafe {
+            // SAFETY: The `current_node_ptr` is guaranteed to exist because links are only followed
+            // in the while loop above when the link exists.
+            current_node_ptr.as_ref().levels[0]
+                .as_ref()
+                .unwrap()
+                .as_ref()
+        };
+        if found_node.key.as_ref().unwrap().ne(key) {
             // No-op if we didn't find the key in the skip list
             return None;
         }
 
         let mut num_nodes_adjusted: usize = 0;
         for level_idx in (0..self.height()).rev() {
-            let previous_node = nodes_to_update[level_idx].as_ref().map(Rc::clone).unwrap();
-            let maybe_next_node = previous_node.borrow().levels[level_idx]
-                .as_ref()
-                .map(Rc::clone);
+            let previous_node = unsafe {
+                /*
+                SAFETY:
+                `nodes_to_update` is populated above with `current_node_ptr` that are checked for
+                existence.
+                */
+                nodes_to_update[level_idx].take().unwrap().as_mut()
+            };
+            let maybe_next_node = previous_node.levels[level_idx].as_mut();
 
             // If the next pointer of the node we ended at on this level is the node for the search
             // key, adjust the next pointer to point to the node after the node we are removing.
-            if maybe_next_node.is_some() {
-                let mut borrowed_next_node = maybe_next_node.as_ref().unwrap().borrow_mut();
-                if borrowed_next_node.key.as_ref().unwrap().eq(key) {
-                    previous_node.borrow_mut().levels[level_idx] =
-                        borrowed_next_node.levels[level_idx].take();
+            if let Some(next_node_ptr) = maybe_next_node {
+                // SAFETY: Links are guaranteed to exist if not `None`
+                let next_node = unsafe { next_node_ptr.as_mut() };
+                if next_node.key.as_ref().unwrap().eq(key) {
+                    previous_node.levels[level_idx] = next_node.levels[level_idx].take();
                     num_nodes_adjusted += 1;
                 }
             }
@@ -274,8 +322,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             + (2 * mem::size_of::<Link<K, V>>() * num_nodes_adjusted);
         self.dec_length();
 
-        let mutable_found_node = maybe_found_node.borrow_mut();
-        Some(mutable_found_node.value.as_ref().cloned().unwrap())
+        Some(found_node.value.as_ref().cloned().unwrap())
     }
 
     /// The number of elements in the skip list.
@@ -290,18 +337,20 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
 
     /// Print out the keys of elements in the skip list.
     pub fn print_keys(&self) {
-        let mut node = self.head.as_ref().map(Rc::clone);
-        while node.is_some() {
-            let unwrapped_node = node.unwrap();
-            let borrowed_node = unwrapped_node.borrow();
-            let wrapped_key = borrowed_node.key.as_ref();
+        let mut maybe_node = self.head.as_ref();
+        while maybe_node.is_some() {
+            let node = unsafe {
+                // SAFETY: Links are always valid nodes.
+                maybe_node.unwrap().as_ref()
+            };
+            let wrapped_key = node.key.as_ref();
             if wrapped_key.is_some() {
                 println!("Key: {:?}", wrapped_key.unwrap());
             } else {
                 println!("Head");
             }
 
-            node = borrowed_node.levels[0].as_ref().map(Rc::clone);
+            maybe_node = node.levels[0].as_ref();
         }
     }
 
@@ -317,6 +366,25 @@ where
     K: Ord + Hash + Debug + Clone,
     V: Clone,
 {
+    /// An iterator visiting each node.
+    pub fn iter(&self) -> NodeIterHelper<'_, K, V> {
+        if self.is_empty() {
+            return NodeIterHelper { next: None };
+        }
+
+        let maybe_next = unsafe {
+            // SAFETY: The head is always a valid node.
+            self.head.as_ref().unwrap().as_ref().levels[0]
+        };
+
+        let next = maybe_next.map(|node_ptr| unsafe {
+            // SAFETY: All links are valid if they exist.
+            node_ptr.as_ref()
+        });
+
+        NodeIterHelper { next }
+    }
+
     /// Returns the entries stored in the skip list as `Vec<(K,V)>` with cloned values.
     ///
     /// # Examples
@@ -340,10 +408,9 @@ where
     /// ```
     pub fn entries(&self) -> Vec<(K, V)> {
         let mut kv_pairs = Vec::<(K, V)>::with_capacity(self.len());
-        for node in self.iter() {
-            let borrowed_node = node.borrow();
-            let cloned_key = borrowed_node.key.as_ref().cloned().unwrap();
-            let cloned_value = borrowed_node.value.as_ref().cloned().unwrap();
+        for (key, value) in self.iter() {
+            let cloned_key = key.clone();
+            let cloned_value = value.clone();
             kv_pairs.push((cloned_key, cloned_value));
         }
 
@@ -355,7 +422,10 @@ where
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
-        self.head.as_ref().unwrap().borrow().levels.len()
+        // SAFETY: The head node always exists and should always be valid.
+        let head_node = unsafe { self.head.as_ref().unwrap().as_ref() };
+        println!("height: {}", head_node.levels.len());
+        head_node.levels.len()
     }
 
     /// Generates a random height according to a geometric distribution.
@@ -381,7 +451,10 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         }
 
         let height_difference = new_height - self.height();
-        let mut head_node = self.head.as_ref().unwrap().borrow_mut();
+        let head_node = unsafe {
+            // SAFETY: The head node always exists and should always be valid.
+            self.head.as_mut().unwrap().as_mut()
+        };
         for _ in 0..height_difference {
             head_node.levels.push(None);
         }
@@ -396,50 +469,48 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     fn dec_length(&mut self) {
         self.length -= 1;
     }
-
-    /// An iterator visiting each node
-    fn iter(&self) -> Iter<K, V> {
-        if self.is_empty() {
-            return Iter { next: None };
-        }
-
-        Iter {
-            next: self.head.as_ref().unwrap().borrow().levels[0]
-                .as_ref()
-                .map(Rc::clone),
-        }
-    }
 }
 
-/// An iterator over the entries of a `SkipList`.
+/// An iterator adapter over the nodes of a `SkipList`.
 ///
 /// This `struct` is created by the [`iter`] method.
 ///
 /// [`iter`]: SkipList::iter
-struct Iter<K, V>
+pub struct NodeIterHelper<'a, K, V>
 where
     K: Ord + Hash + Debug,
     V: Clone,
 {
-    next: Option<Rc<RefCell<SkipNode<K, V>>>>,
+    next: Option<&'a SkipNode<K, V>>,
 }
 
-impl<K, V> Iterator for Iter<K, V>
+impl<'a, K, V> Iterator for NodeIterHelper<'a, K, V>
 where
     K: Ord + Hash + Debug,
     V: Clone,
 {
-    type Item = Rc<RefCell<SkipNode<K, V>>>;
+    type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let wrapped_current_node = self.next.as_ref();
+        let wrapped_current_node = self.next;
 
         // Short-circuit return `None`
         wrapped_current_node?;
 
-        let current_node = wrapped_current_node.map(Rc::clone).unwrap();
-        self.next = current_node.borrow().levels[0].as_ref().map(Rc::clone);
-        Some(current_node)
+        let current_node = wrapped_current_node.unwrap();
+        self.next = unsafe {
+            /*
+            SAFETY:
+            Links at level 0 are always valid. No mutations can happen because the only way to get a
+            `NodeIterator` is via [`SkipList::iter`] which borrows an immutable reference.
+            */
+            Some(current_node.levels[0].as_ref().unwrap().as_ref())
+        };
+
+        Some((
+            current_node.key.as_ref().unwrap(),
+            current_node.value.as_ref().unwrap(),
+        ))
     }
 }
 
@@ -517,7 +588,7 @@ mod tests {
 
         let actual_value = skiplist.get(&1).unwrap();
 
-        assert_eq!(expected_value, actual_value);
+        assert_eq!(&expected_value, actual_value);
     }
 
     #[test]
@@ -530,7 +601,7 @@ mod tests {
 
         let actual_value = skiplist.get(&2).unwrap();
 
-        assert_eq!(expected_value, actual_value);
+        assert_eq!(&expected_value, actual_value);
     }
 
     #[test]
@@ -543,7 +614,7 @@ mod tests {
 
         let actual_value = skiplist.get(&3).unwrap();
 
-        assert_eq!(expected_value, actual_value);
+        assert_eq!(&expected_value, actual_value);
     }
 
     #[test]
@@ -658,6 +729,10 @@ mod tests {
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
+
+        /* let mut iter = skiplist.iter();
+        let x = iter.next();
+        assert_eq!(x.0, 1); */
 
         skiplist.remove(&3);
         skiplist.remove(&1);
