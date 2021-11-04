@@ -341,14 +341,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     pub fn get_approx_mem_usage(&self) -> usize {
         self.approximate_mem_usage
     }
-}
 
-/// Implementation for keys and values that implement `Clone`
-impl<K, V> SkipList<K, V>
-where
-    K: Ord + Hash + Debug + Clone,
-    V: Clone,
-{
     /// An iterator visiting each node.
     pub fn iter(&self) -> NodeIterHelper<'_, K, V> {
         if self.is_empty() {
@@ -362,7 +355,14 @@ where
 
         NodeIterHelper { next }
     }
+}
 
+/// Implementation for keys and values that implement `Clone`
+impl<K, V> SkipList<K, V>
+where
+    K: Ord + Hash + Debug + Clone,
+    V: Clone,
+{
     /// Eagerly returns the entries stored in the skip list as `Vec<(K,V)>` with cloned values.
     ///
     /// # Examples
