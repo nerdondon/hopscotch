@@ -20,7 +20,7 @@ flip a coin). The geometric distrubution actually defaults to p = 0.25 but this 
 
 ### Concurrency
 
-The first version of this will be a non-concurrent version, requiring an external lock for
+The initial versions of this will be a non-concurrent version, requiring an external lock for
 concurrent writes. The hope is to iteratively add concurrency features with `Arc`/`RwLock` first and
 then lock-free methods following.
 
@@ -41,3 +41,4 @@ then lock-free methods following.
 - [OpenDSA - 15.1 Skip Lists](https://opendsa-server.cs.vt.edu/OpenDSA/Books/CS3/html/SkipList.html)
 - [Learn Rust With Entirely Too Many Linked Lists](https://rust-unofficial.github.io/too-many-lists/)
 - [Advanced Lifetimes](http://web.mit.edu/rust-lang_v1.25/arch/amd64_ubuntu1404/share/doc/rust/html/book/second-edition/ch19-02-advanced-lifetimes.html)
+- [std::linked_list](https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/linked_list.rs)
