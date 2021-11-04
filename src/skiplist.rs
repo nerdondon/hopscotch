@@ -35,9 +35,16 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipNode<K, V> {
     }
 }
 
+/// A skip list.
+///
+/// # Safety
+///
+/// Invariants:
+///
+/// - If an Link exists it must be valid to dereference to a `SkipNode`.
 #[derive(Debug)]
 pub struct SkipList<K: Ord + Hash + Debug, V: Clone> {
-    head: Link<K, V>,
+    head: Box<SkipNode<K, V>>,
     length: usize,
     /// The probability of success used in probability distribution for determining height of a new
     /// node. Defaults to 0.25.
@@ -60,9 +67,9 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// let skiplist = SkipList::<i32, String>::new(None);
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
-        let mut head = SkipNode::<K, V>::head();
+        let head = Box::new(SkipNode::head());
         let mut skiplist = SkipList {
-            head: NonNull::new(&mut head as *mut _),
+            head,
             /// The number of elements in the skip list.
             length: 0,
             probability: probability.unwrap_or(0.25),
@@ -72,9 +79,6 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         // TODO: Make size tracking a feature?
         let size = mem::size_of_val(&skiplist) + mem::size_of::<SkipNode<K, V>>();
         skiplist.approximate_mem_usage = size;
-
-        let head_node = unsafe { skiplist.head.as_ref().unwrap().as_ref() };
-        println!("height: {}", head_node.levels.len());
 
         skiplist
     }
@@ -87,32 +91,26 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             return None;
         }
 
-        let mut current_node_ptr = self.head.as_ref().unwrap();
+        let mut current_node = &*self.head;
 
         // Start iteration at the top of the skip list "towers" and iterate through pointers at the
         // current level. If we skipped past our key, move down a level.
         for level_idx in (0..self.height()).rev() {
-            unsafe {
-                /*
-                Get an optional of the next node
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
 
-                SAFETY:
-                `current_node_ptr` is initialized with the head node (which always exists) and
-                is only updated with `maybe_next_node` when the next node exists.
-                */
-                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
-
-                while maybe_next_node.is_some() {
-                    let next_node_ptr = maybe_next_node.unwrap();
+            while maybe_next_node.is_some() {
+                let next_node_ptr = maybe_next_node.unwrap();
+                let next_node = unsafe {
                     // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
-                    let next_node = next_node_ptr.as_ref();
-                    match next_node.key.as_ref().unwrap().cmp(key) {
-                        std::cmp::Ordering::Less => {
-                            current_node_ptr = next_node_ptr;
-                            maybe_next_node = next_node.levels[level_idx].as_ref();
-                        }
-                        _ => break,
+                    next_node_ptr.as_ref()
+                };
+                match next_node.key.as_ref().unwrap().cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.levels[level_idx].as_ref();
                     }
+                    _ => break,
                 }
             }
         }
@@ -121,21 +119,13 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         // prior to the node we are looking for. We need to move the pointer forward one time and
         // check we actually arrived at our node or if we hit the end of the levels without finding
         // anything.
-        let potential_record = unsafe {
-            /*
-            SAFETY:
-            `current_node_ptr` is initialized with the head node (which always exists) and
-            is only updated with `maybe_next_node` when the next node exists.
-            */
-            current_node_ptr.as_ref().levels[0]
-        };
-
+        let potential_record = current_node.levels[0].as_ref();
         if potential_record.is_some() {
             let record = unsafe {
                 /*
                 SAFETY:
-                The `is_some` check and `NonNull` ensures that this pointer is valid to be
-                dereferenced.
+                The `is_some` check ensures that the pointer exists and globally all links are
+                guaranteed to be valid.
                 */
                 potential_record.as_ref().unwrap().as_ref()
             };
@@ -170,46 +160,47 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
 
         // Track where we end on each level
         let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
-        let mut current_node_ptr = self.head.as_ref().unwrap();
+        let list_height = self.height();
+        let mut current_node = self.head.as_ref();
 
         // Start iteration at the top of the skip list "towers" and find the insert position at each
         // level
-        for level_idx in (0..self.height()).rev() {
-            unsafe {
-                /*
-                Get an optional of the next node
+        for level_idx in (0..list_height).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
 
-                SAFETY:
-                `current_node_ptr` is initialized with the head node (which always exists) and
-                is only updated with `maybe_next_node` when the next node exists.
-                */
-                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
-
-                while maybe_next_node.is_some() {
-                    let next_node_ptr = maybe_next_node.unwrap();
+            while maybe_next_node.is_some() {
+                let next_node_ptr = maybe_next_node.unwrap();
+                let next_node = unsafe {
                     // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
-                    let next_node = next_node_ptr.as_ref();
-                    match next_node.key.as_ref().unwrap().cmp(&key) {
-                        std::cmp::Ordering::Less => {
-                            current_node_ptr = next_node_ptr;
-                            maybe_next_node = next_node.levels[level_idx].as_ref();
-                        }
-                        _ => break,
+                    next_node_ptr.as_ref()
+                };
+                match next_node.key.as_ref().unwrap().cmp(&key) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.levels[level_idx].as_ref();
                     }
+                    _ => break,
                 }
             }
 
             // Keep track of the node we stopped at. This is either the node right before our new
-            // node or end of the level if no lesser node was found.
-            nodes_to_update[level_idx] = Some(*current_node_ptr);
+            // node or head node of the level if no lesser node was found.
+            nodes_to_update[level_idx] = Some(current_node.into());
         }
 
-        let mut new_node = SkipNode::new(key, value, new_node_height);
+        let mut new_node = Box::new(SkipNode::new(key, value, new_node_height));
+        /*
+        `.unwrap` is called explicity after the `NonNull::new` because `None` is produced on
+        failure and we want to be explicit about the existence of the value stored in the
+        levels vector.
+        */
+        let new_node_ptr = NonNull::new(new_node.as_mut()).unwrap();
         for level_idx in (0..new_node_height).rev() {
             let previous_node = unsafe {
                 /*
                 SAFETY:
-                `nodes_to_update` is populated above with `current_node_ptr` that are checked for
+                `nodes_to_update` is populated above with `current_node`, which is checked for
                 existence.
                 */
                 nodes_to_update[level_idx].as_mut().unwrap().as_mut()
@@ -220,7 +211,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             new_node.levels[level_idx] = previous_node.levels[level_idx].take();
 
             // Set the next pointer of the previous node to the new node
-            previous_node.levels[level_idx] = NonNull::new(&mut new_node as *mut _);
+            previous_node.levels[level_idx] = Some(new_node_ptr);
         }
 
         // Book keeping for size
@@ -231,6 +222,13 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         self.approximate_mem_usage +=
             mem::size_of::<SkipNode<K, V>>() + (2 * mem::size_of::<Link<K, V>>() * new_node_height);
         self.inc_length();
+
+        /*
+        `Box::leak` is called so that the node does not get deallocated at the end of the function.
+        The `SkipList::remove` method will ensure to reform the box from the pointer so that the
+        node is de-allocated on removal.
+        */
+        Box::leak(new_node);
     }
 
     /// Remove a key-value pair.
@@ -243,49 +241,41 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
 
         // Track where we end on each level
         let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
-        let mut current_node_ptr = self.head.as_ref().unwrap();
+        let list_height = self.height();
+        let mut current_node = self.head.as_ref();
 
         // Start iteration at the top of the skip list "towers" and find the removal position at each
         // level
-        for level_idx in (0..self.height()).rev() {
-            unsafe {
-                /*
-                Get an optional of the next node
+        for level_idx in (0..list_height).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
 
-                SAFETY:
-                `current_node_ptr` is initialized with the head node (which always exists) and
-                is only updated with `maybe_next_node` when the next node exists.
-                */
-                let mut maybe_next_node = current_node_ptr.as_ref().levels[level_idx].as_ref();
-
-                while maybe_next_node.is_some() {
-                    let next_node_ptr = maybe_next_node.unwrap();
+            while maybe_next_node.is_some() {
+                let next_node_ptr = maybe_next_node.unwrap();
+                let next_node = unsafe {
                     // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
-                    let next_node = next_node_ptr.as_ref();
-                    match next_node.key.as_ref().unwrap().cmp(key) {
-                        std::cmp::Ordering::Less => {
-                            current_node_ptr = next_node_ptr;
-                            maybe_next_node = next_node.levels[level_idx].as_ref();
-                        }
-                        _ => break,
+                    next_node_ptr.as_ref()
+                };
+                match next_node.key.as_ref().unwrap().cmp(key) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.levels[level_idx].as_ref();
                     }
+                    _ => break,
                 }
             }
 
             // Keep track of the node we stopped at. This is either the node right before our new
-            // node or end of the level if no lesser node was found.
-            nodes_to_update[level_idx] = Some(*current_node_ptr);
+            // node or head node of the level if no lesser node was found.
+            nodes_to_update[level_idx] = Some(current_node.into());
         }
 
         // Our comparator uses a less than condition so the last node we stopped at might be just in
         // front of the node we are looking to remove
+        let found_node_ptr = *current_node.levels[0].as_ref().unwrap();
         let found_node = unsafe {
-            // SAFETY: The `current_node_ptr` is guaranteed to exist because links are only followed
-            // in the while loop above when the link exists.
-            current_node_ptr.as_ref().levels[0]
-                .as_ref()
-                .unwrap()
-                .as_ref()
+            // SAFETY: All links are guaranteed to be valid
+            found_node_ptr.as_ref()
         };
         if found_node.key.as_ref().unwrap().ne(key) {
             // No-op if we didn't find the key in the skip list
@@ -322,7 +312,19 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             + (2 * mem::size_of::<Link<K, V>>() * num_nodes_adjusted);
         self.dec_length();
 
-        Some(found_node.value.as_ref().cloned().unwrap())
+        // Re-box the allocation the pointer represents so that it can get dropped.
+        // Strategy from std::linked_list: https://github.com/rust-lang/rust/blob/6f40fa4353a9075288f74ecc3553010b34c65baa/library/alloc/src/collections/linked_list.rs#L186
+        let boxed_found_node = unsafe {
+            /*
+            SAFETY:
+            The other references to this pointer were removed when removing the links above, so
+            `found_node_ptr` should be the last reference to this node. All links should be valid so
+            `found_ndde_ptr`, which is a link at level 0, should be valid.
+            */
+            Box::from_raw(found_node_ptr.as_ptr())
+        };
+
+        Some(boxed_found_node.value.unwrap())
     }
 
     /// The number of elements in the skip list.
@@ -333,25 +335,6 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Returns true if the skip list does not hold any elements; otherwise false.
     pub fn is_empty(&self) -> bool {
         self.length == 0
-    }
-
-    /// Print out the keys of elements in the skip list.
-    pub fn print_keys(&self) {
-        let mut maybe_node = self.head.as_ref();
-        while maybe_node.is_some() {
-            let node = unsafe {
-                // SAFETY: Links are always valid nodes.
-                maybe_node.unwrap().as_ref()
-            };
-            let wrapped_key = node.key.as_ref();
-            if wrapped_key.is_some() {
-                println!("Key: {:?}", wrapped_key.unwrap());
-            } else {
-                println!("Head");
-            }
-
-            maybe_node = node.levels[0].as_ref();
-        }
     }
 
     /// Get the approximate amount of memory used in number of bytes.
@@ -372,12 +355,7 @@ where
             return NodeIterHelper { next: None };
         }
 
-        let maybe_next = unsafe {
-            // SAFETY: The head is always a valid node.
-            self.head.as_ref().unwrap().as_ref().levels[0]
-        };
-
-        let next = maybe_next.map(|node_ptr| unsafe {
+        let next = self.head.levels[0].as_ref().map(|node_ptr| unsafe {
             // SAFETY: All links are valid if they exist.
             node_ptr.as_ref()
         });
@@ -385,7 +363,7 @@ where
         NodeIterHelper { next }
     }
 
-    /// Returns the entries stored in the skip list as `Vec<(K,V)>` with cloned values.
+    /// Eagerly returns the entries stored in the skip list as `Vec<(K,V)>` with cloned values.
     ///
     /// # Examples
     /// ```
@@ -416,13 +394,20 @@ where
 
         kv_pairs
     }
+
+    /// Print out the keys of elements in the skip list.
+    pub fn print_keys(&self) {
+        let entries = self.entries();
+        for (key, _value) in entries {
+            println!("Key: {:?}", key);
+        }
+    }
 }
 
 // Private methods of SkipList
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
-        println!("height: {}", self.head.levels.len());
         self.head.levels.len()
     }
 
@@ -449,12 +434,8 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         }
 
         let height_difference = new_height - self.height();
-        let head_node = unsafe {
-            // SAFETY: The head node always exists and should always be valid.
-            self.head.as_mut().unwrap().as_mut()
-        };
         for _ in 0..height_difference {
-            head_node.levels.push(None);
+            self.head.levels.push(None);
         }
     }
 
@@ -502,7 +483,9 @@ where
             Links at level 0 are always valid. No mutations can happen because the only way to get a
             `NodeIterator` is via [`SkipList::iter`] which borrows an immutable reference.
             */
-            Some(current_node.levels[0].as_ref().unwrap().as_ref())
+            current_node.levels[0]
+                .as_ref()
+                .map(|node_ptr| node_ptr.as_ref())
         };
 
         Some((
@@ -648,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_returns_a_vec_with_the_key_value_pairs_of_elements() {
+    fn entries_returns_a_vec_with_the_key_value_pairs_of_elements() {
         let mut skiplist = SkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
@@ -727,10 +710,6 @@ mod tests {
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
-
-        /* let mut iter = skiplist.iter();
-        let x = iter.next();
-        assert_eq!(x.0, 1); */
 
         skiplist.remove(&3);
         skiplist.remove(&1);
