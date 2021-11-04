@@ -422,10 +422,8 @@ where
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
-        // SAFETY: The head node always exists and should always be valid.
-        let head_node = unsafe { self.head.as_ref().unwrap().as_ref() };
-        println!("height: {}", head_node.levels.len());
-        head_node.levels.len()
+        println!("height: {}", self.head.levels.len());
+        self.head.levels.len()
     }
 
     /// Generates a random height according to a geometric distribution.
