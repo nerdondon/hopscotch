@@ -3,6 +3,7 @@ use rand_distr::{Distribution, Geometric};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::iter::FusedIterator;
 use std::mem;
 use std::ptr::NonNull;
 
@@ -493,6 +494,26 @@ where
             current_node.value.as_ref().unwrap(),
         ))
     }
+}
+
+impl<'a, K, V> IntoIterator for &'a SkipList<K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = NodeIterHelper<'a, K, V>;
+
+    fn into_iter(self) -> NodeIterHelper<'a, K, V> {
+        self.iter()
+    }
+}
+
+impl<K, V> FusedIterator for NodeIterHelper<'_, K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
 }
 
 #[cfg(test)]
