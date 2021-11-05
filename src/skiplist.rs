@@ -151,7 +151,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// skiplist.insert(1, "apple".to_string());
     ///
     /// let some_value = skiplist.get(&2).unwrap();
-    /// assert_eq!(some_value, "banana".to_string());
+    /// assert_eq!(some_value, "banana");
     /// ```
     pub fn insert(&mut self, key: K, value: V) {
         let new_node_height = self.random_height();
