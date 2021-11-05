@@ -42,3 +42,5 @@ then lock-free methods following.
 - [Learn Rust With Entirely Too Many Linked Lists](https://rust-unofficial.github.io/too-many-lists/)
 - [Advanced Lifetimes](http://web.mit.edu/rust-lang_v1.25/arch/amd64_ubuntu1404/share/doc/rust/html/book/second-edition/ch19-02-advanced-lifetimes.html)
 - [std::linked_list](https://github.com/rust-lang/rust/blob/master/library/alloc/src/collections/linked_list.rs)
+- Great reference on creating an iterator in Rust:
+  [Creating an Iterator in Rust](https://aloso.github.io/2021/03/09/creating-an-iterator)
