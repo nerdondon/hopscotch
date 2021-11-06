@@ -320,7 +320,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             SAFETY:
             The other references to this pointer were removed when removing the links above, so
             `found_node_ptr` should be the last reference to this node. All links should be valid so
-            `found_ndde_ptr`, which is a link at level 0, should be valid.
+            `found_node_ptr`, which is a link at level 0, should be valid.
             */
             Box::from_raw(found_node_ptr.as_ptr())
         };
@@ -343,7 +343,9 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         self.approximate_mem_usage
     }
 
-    /// An iterator visiting each node.
+    /// An iterator visiting each node in order.
+    ///
+    /// Returns values of (&'a K, &'a V)
     pub fn iter(&self) -> NodeIterHelper<'_, K, V> {
         if self.is_empty() {
             return NodeIterHelper { next: None };
@@ -355,6 +357,22 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         });
 
         NodeIterHelper { next }
+    }
+
+    /// An iterator visiting each node in order with mutable references to values.
+    ///
+    /// Returns values of (&'a K, &'a mut V)
+    pub fn iter_mut(&mut self) -> NodeIterMutHelper<'_, K, V> {
+        if self.is_empty() {
+            return NodeIterMutHelper { next: None };
+        }
+
+        let next = self.head.levels[0].as_mut().map(|node_ptr| unsafe {
+            // SAFETY: All links are valid if they exist.
+            node_ptr.as_mut()
+        });
+
+        NodeIterMutHelper { next }
     }
 }
 
@@ -514,6 +532,50 @@ where
     K: Ord + Hash + Debug,
     V: Clone,
 {
+}
+
+/// An mutable iterator adapter over the nodes of a `SkipList`.
+///
+/// This `struct` is created by the [`iter_mut`] method.
+///
+/// [`iter_mut`]: SkipList::iter_mut
+pub struct NodeIterMutHelper<'a, K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    next: Option<&'a mut SkipNode<K, V>>,
+}
+
+impl<'a, K, V> Iterator for NodeIterMutHelper<'a, K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next.take() {
+            None => None,
+            Some(current_node) => {
+                self.next = unsafe {
+                    /*
+                    SAFETY:
+                    Links at level 0 are always valid. No mutations can happen because the only way to get a
+                    `NodeIterator` is via [`SkipList::iter`] which borrows an immutable reference.
+                    */
+                    current_node.levels[0]
+                        .as_mut()
+                        .map(|node_ptr| node_ptr.as_mut())
+                };
+
+                return Some((
+                    current_node.key.as_ref().unwrap(),
+                    current_node.value.as_mut().unwrap(),
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
