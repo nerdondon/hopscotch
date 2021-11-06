@@ -578,6 +578,38 @@ where
     }
 }
 
+impl<K, V> Drop for SkipList<K, V>
+where
+    K: Ord + Hash + Debug,
+    V: Clone,
+{
+    fn drop(&mut self) {
+        if self.is_empty() {
+            return;
+        }
+
+        let mut maybe_node_ptr = self.head.as_mut().levels[0];
+
+        while maybe_node_ptr.is_some() {
+            let mut current_node_ptr = maybe_node_ptr.unwrap();
+
+            /*
+            Re-box the allocation the pointer represents so that it can get dropped. Insert's
+            leak the boxed node when it is created.
+
+            It is ok to leave pointers in the dropped node's levels vector dangling because all
+            nodes are getting dropped.
+            */
+            let current_node = unsafe {
+                // SAFETY: All links are guaranteed to be valid nodes.
+                Box::from_raw(current_node_ptr.as_mut())
+            };
+
+            maybe_node_ptr = current_node.levels[0];
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
