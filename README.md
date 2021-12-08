@@ -20,14 +20,13 @@ flip a coin). The geometric distrubution actually defaults to p = 0.25 but this 
 
 ### Concurrency
 
-The initial versions of this will be a non-concurrent version, requiring an external lock for
-concurrent writes. The hope is to iteratively add concurrency features with `Arc`/`RwLock` first and
-then lock-free methods following.
+A version of the skip list that allows for lock-free concurrent reads is now available by turning on
+the `concurrent` feature. This skip list has a couple major feature gaps:
 
-## TODO's and Considerations
+1. Callers must get a lock (e.g. `Mutex` or `RwLock`) over the skip list before insertions can be
+   done.
 
-- The non-concurrent version can be done with the normal `Rc`/`RefCell` construction or using
-  `unsafe`/raw pointers much like the standard library's linked list implementation
+1. Delete has not been implemented yet because my use case does not require delete.
 
 ## Other art
 
