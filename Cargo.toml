@@ -14,3 +14,9 @@ rand_distr = "0.4.0"
 
 [dev-dependencies]
 pretty_assertions = "1.0.0"
+
+[features]
+default = ["concurrent"]
+
+# Enables usage of the concurrent skiplist
+concurrent = []
