@@ -45,6 +45,10 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
     /// Get an immutable reference to the next node at the specified level if it exists.
     /// Otherwise, `None`.
     fn next_at_level(&self, level: usize) -> Option<&SkipNode<K, V>> {
+        if self.levels.is_empty() {
+            return None;
+        }
+
         self.levels[level].as_ref().and_then(|node_ptr| {
             // Get atomic access to the underlying pointer
             let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
@@ -66,6 +70,10 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
     /// Get mutable reference to the next node at the specified level if it exists.
     /// Otherwise, `None`.
     fn next_at_level_mut(&mut self, level: usize) -> Option<&mut SkipNode<K, V>> {
+        if self.levels.is_empty() {
+            return None;
+        }
+
         self.levels[level].as_mut().and_then(|node_ptr| {
             // Get atomic access to the underlying pointer
             let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
@@ -158,30 +166,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
             return None;
         }
 
-        let mut current_node = self.head.as_ref();
-
-        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
-        // current level. If we skipped past our key, move down a level.
-        for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = current_node.next_at_level(level_idx);
-
-            while let Some(next_node) = maybe_next_node {
-                match next_node.key.as_ref().unwrap().cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        current_node = next_node;
-                        maybe_next_node = next_node.next_at_level(level_idx);
-                    }
-                    _ => break,
-                }
-            }
-        }
-
-        // The while loop uses a less than comparator and stops at the node that is potentially just
-        // prior to the node we are looking for. We need to move the pointer forward one time and
-        // check we actually arrived at our node or if we hit the end of the levels without finding
-        // anything.
-        let potential_record = current_node.next();
+        let potential_record = self.find_greater_or_equal_node(key);
         if let Some(record) = potential_record {
             if record.key.as_ref().unwrap().eq(key) {
                 return record.value.as_ref();
@@ -288,6 +273,60 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
         node is de-allocated on removal.
         */
         Box::leak(new_node);
+    }
+
+    /// Return a reference to the key and value of the first node with a key that is greater than
+    /// or equal to the target key.
+    pub fn find_greater_or_equal(&self, target: &K) -> Option<(&K, &V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        self.find_greater_or_equal_node(target)
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+    }
+
+    /// Return a reference to the key and value of the last node with a key that is less than the
+    /// target key.
+    pub fn find_less_than(&self, target: &K) -> Option<(&K, &V)> {
+        self.find_less_than_node(target).and_then(|node| {
+            // Only the head node has empty keys and values, so this means the search
+            // stayed on the head node. This can happen if we are searching for a target
+            // with less than all of the keys in the skip list. Return `None` in this case.
+            node.key.as_ref()?;
+
+            Some((node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+        })
+    }
+
+    /// Return a reference to the key and value of the first node in the skip list if there is a
+    /// node. Otherwise, it returns `None`.
+    pub fn first(&self) -> Option<(&K, &V)> {
+        self.head
+            .next()
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+    }
+
+    /// Return a reference to the key and value of the last node in the skip list if there is a
+    /// node. Otherwise, it returns `None`.
+    pub fn last(&self) -> Option<(&K, &V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = self.head.as_ref();
+        for level_idx in (0..self.height()).rev() {
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+            while let Some(next_node) = maybe_next_node {
+                current_node = next_node;
+                maybe_next_node = next_node.next_at_level(level_idx);
+            }
+        }
+
+        Some((
+            current_node.key.as_ref().unwrap(),
+            current_node.value.as_ref().unwrap(),
+        ))
     }
 
     /// The number of elements in the skip list.
@@ -405,6 +444,45 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
     /// Increment length by 1.
     fn inc_length(&mut self) {
         self.length.fetch_add(1, atomic::Ordering::AcqRel);
+    }
+
+    /// Return a reference to the last node with a key that is less than the target key.
+    fn find_less_than_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = self.head.as_ref();
+        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
+        // current level. If we skipped past our key, move down a level.
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(target) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.next_at_level(level_idx);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        Some(current_node)
+    }
+
+    /// Return a reference to the first node with a key that is greater than or equal to the target
+    /// key.
+    fn find_greater_or_equal_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        self.find_less_than_node(target).and_then(|prev_node| {
+            // We potentially found a node right before the first node with a key greater than or
+            // equal to the our target key. Move the pointer forward one time to check if we
+            // actually have the node we are looking for or if we hit the end of the levels without
+            // finding anything.
+            prev_node.next()
+        })
     }
 }
 
@@ -712,5 +790,118 @@ mod tests {
         skiplist.insert(2, "banana".to_string());
         usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
         assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_first_returns_references_to_the_first_key_value_pair() {
+        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+
+        assert_eq!(skiplist.first(), Some((&1, &"apple".to_string())));
+    }
+
+    #[test]
+    fn with_an_empty_skiplist_first_returns_none() {
+        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+
+        assert_eq!(skiplist.first(), None);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_last_returns_references_to_the_last_key_value_pair() {
+        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+
+        assert_eq!(skiplist.last(), Some((&5, &"watermelon".to_string())));
+    }
+
+    #[test]
+    fn with_an_empty_skiplist_last_returns_none() {
+        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+
+        assert_eq!(skiplist.last(), None);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_find_greater_or_equal_returns_correct_responses() {
+        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+        skiplist.insert(11, "grapefruit".to_string());
+        skiplist.insert(12, "mango".to_string());
+
+        // First element exists so it is found
+        assert_eq!(
+            skiplist.find_greater_or_equal(&1),
+            Some((&1, &"apple".to_string()))
+        );
+
+        // Middle element exists so it is found
+        assert_eq!(
+            skiplist.find_greater_or_equal(&3),
+            Some((&3, &"orange".to_string()))
+        );
+
+        // Target doesn't exist so it finds a greatest
+        assert_eq!(
+            skiplist.find_greater_or_equal(&7),
+            Some((&11, &"grapefruit".to_string()))
+        );
+
+        // Last element exists so it is found
+        assert_eq!(
+            skiplist.find_greater_or_equal(&12),
+            Some((&12, &"mango".to_string()))
+        );
+
+        // Greater than last element so it returns `None`
+        assert_eq!(skiplist.find_greater_or_equal(&20), None);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_find_less_than_returns_correct_responses() {
+        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+        skiplist.insert(11, "grapefruit".to_string());
+        skiplist.insert(12, "mango".to_string());
+
+        // Finding a target less than every element in the list returns `None`
+        assert_eq!(skiplist.find_less_than(&0), None);
+
+        // Finding a target less than the first element returns `None`
+        assert_eq!(skiplist.find_less_than(&1), None);
+
+        // Finding a target less than an existing middle element
+        assert_eq!(
+            skiplist.find_less_than(&3),
+            Some((&2, &"banana".to_string()))
+        );
+
+        // Finding a target less than a non-existent middle element
+        assert_eq!(
+            skiplist.find_less_than(&7),
+            Some((&5, &"watermelon".to_string()))
+        );
+
+        // Finding a target greater than all elements returns the last element
+        assert_eq!(
+            skiplist.find_less_than(&20),
+            Some((&12, &"mango".to_string()))
+        );
     }
 }
