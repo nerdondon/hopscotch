@@ -105,6 +105,9 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
 /// and not deletion. Because of this use-case, deletion is not implemented. It is a larger project
 /// to support full functionality here.
 ///
+/// Because reads are lock-free, iterators may see new values pop up from concurrent insertions.
+/// However, we should not miss any values that were present when the iterator was created.
+///
 /// # Safety
 ///
 /// Invariants:
@@ -115,7 +118,7 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
 ///
 /// [`Ordering::Release`]: std::sync::atomic::Ordering
 #[derive(Debug)]
-pub struct ConcurrentSkiplist<K: Ord + Debug, V: Clone> {
+pub struct ConcurrentSkipList<K: Ord + Debug, V: Clone> {
     /// A dummy head node.
     head: Box<SkipNode<K, V>>,
     /// The number of elements in the skip list.
@@ -128,7 +131,7 @@ pub struct ConcurrentSkiplist<K: Ord + Debug, V: Clone> {
 }
 
 // Public methods of SkipList
-impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
+impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Create a new skip list.
     ///
     /// `probability` is the probability of success used in probability distribution for determining
@@ -142,7 +145,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
         let head = Box::new(SkipNode::head());
-        let skiplist = ConcurrentSkiplist {
+        let skiplist = ConcurrentSkipList {
             head,
             length: AtomicUsize::new(0),
             probability: probability.unwrap_or(0.25),
@@ -359,7 +362,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
 }
 
 /// Implementation for keys and values that implement `Clone`
-impl<K, V> ConcurrentSkiplist<K, V>
+impl<K, V> ConcurrentSkipList<K, V>
 where
     K: Ord + Debug + Clone,
     V: Clone,
@@ -406,7 +409,7 @@ where
 }
 
 // Private methods of SkipList
-impl<K: Ord + Debug, V: Clone> ConcurrentSkiplist<K, V> {
+impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
         self.head.levels.len()
@@ -522,7 +525,7 @@ where
     }
 }
 
-impl<'a, K, V> IntoIterator for &'a ConcurrentSkiplist<K, V>
+impl<'a, K, V> IntoIterator for &'a ConcurrentSkipList<K, V>
 where
     K: Ord + Debug,
     V: Clone,
@@ -543,7 +546,7 @@ where
 }
 
 /// SAFETY: This is safe for because atomic operations are used when changing pointers.
-unsafe impl<K, V> Send for ConcurrentSkiplist<K, V>
+unsafe impl<K, V> Send for ConcurrentSkipList<K, V>
 where
     K: Ord + Debug,
     V: Clone,
@@ -551,14 +554,14 @@ where
 }
 
 /// SAFETY: This is safe for because atomic operations are used when changing pointers.
-unsafe impl<K, V> Sync for ConcurrentSkiplist<K, V>
+unsafe impl<K, V> Sync for ConcurrentSkipList<K, V>
 where
     K: Ord + Debug,
     V: Clone,
 {
 }
 
-impl<K, V> Drop for ConcurrentSkiplist<K, V>
+impl<K, V> Drop for ConcurrentSkipList<K, V>
 where
     K: Ord + Debug,
     V: Clone,
@@ -614,25 +617,25 @@ mod tests {
 
     #[test]
     fn with_an_empty_skiplist_get_returns_none() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
         assert_eq!(skiplist.get(&10), None);
     }
 
     #[test]
     fn with_an_empty_skiplist_is_empty_returns_true() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
         assert_eq!(skiplist.is_empty(), true);
     }
 
     #[test]
     fn with_an_empty_skiplist_len_returns_zero() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
         assert_eq!(skiplist.len(), 0);
     }
 
     #[test]
     fn with_an_empty_skiplist_insert_can_add_an_element() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
 
         skiplist.insert(1, "apple".to_string());
 
@@ -641,7 +644,7 @@ mod tests {
 
     #[test]
     fn insert_can_add_an_element_after_an_existing_element() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(1, "apple".to_string());
 
         skiplist.insert(2, "banana".to_string());
@@ -651,7 +654,7 @@ mod tests {
 
     #[test]
     fn insert_can_add_an_element_before_an_existing_element() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
 
         skiplist.insert(1, "apple".to_string());
@@ -662,7 +665,7 @@ mod tests {
     #[test]
     fn insert_can_add_an_element_between_existing_elements() {
         // TODO: Mock distribution
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
 
@@ -673,7 +676,7 @@ mod tests {
 
     #[test]
     fn get_an_element_at_the_head() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(1, "apple".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(2, "banana".to_string());
@@ -686,7 +689,7 @@ mod tests {
 
     #[test]
     fn get_an_element_in_the_middle() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(1, "apple".to_string());
         skiplist.insert(3, "orange".to_string());
@@ -699,7 +702,7 @@ mod tests {
 
     #[test]
     fn get_an_element_at_the_tail() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -712,7 +715,7 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_getting_a_non_existent_element_returns_none() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -724,7 +727,7 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_is_empty_returns_false() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -734,7 +737,7 @@ mod tests {
 
     #[test]
     fn with_an_empty_skiplist_collect_returns_an_empty_vec() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
 
         let actual_value = skiplist.entries();
 
@@ -744,7 +747,7 @@ mod tests {
 
     #[test]
     fn entries_returns_a_vec_with_the_key_value_pairs_of_elements() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -780,7 +783,7 @@ mod tests {
 
         let mut usage_approximation = approx_initial_usage;
 
-        let mut skiplist = ConcurrentSkiplist::<u16, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<u16, String>::new(None);
         assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
 
         skiplist.insert(1, "apple".to_string());
@@ -794,7 +797,7 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_first_returns_references_to_the_first_key_value_pair() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -806,14 +809,14 @@ mod tests {
 
     #[test]
     fn with_an_empty_skiplist_first_returns_none() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
 
         assert_eq!(skiplist.first(), None);
     }
 
     #[test]
     fn with_a_non_empty_skiplist_last_returns_references_to_the_last_key_value_pair() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -825,14 +828,14 @@ mod tests {
 
     #[test]
     fn with_an_empty_skiplist_last_returns_none() {
-        let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
 
         assert_eq!(skiplist.last(), None);
     }
 
     #[test]
     fn with_a_non_empty_skiplist_find_greater_or_equal_returns_correct_responses() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
@@ -871,7 +874,7 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_find_less_than_returns_correct_responses() {
-        let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
         skiplist.insert(2, "banana".to_string());
         skiplist.insert(3, "orange".to_string());
         skiplist.insert(1, "apple".to_string());
