@@ -4,8 +4,7 @@ name = "nerdondon-hopscotch"
 authors = ["nerdondon"]
 description = "A skip list"
 repository = "https://github.com/nerdondon/hopscotch"
-version = "2.2.0"
-edition = "2018"
+edition = "2021"
 license = "MIT"
 
 [dependencies]
