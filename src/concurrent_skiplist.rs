@@ -967,3 +967,180 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use rand::RngCore;
+    use std::iter;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    const NUM_KEYS: usize = 4;
+
+    /**
+    This test attempts to mimic the [concurrent test] used for the skip list in LevelDB.
+
+    We want to make sure that with a single writer and multiple concurrent readers, the readers
+    always observe all data that was present in the skip list when a reader was spawned. Because
+    insertions happen concurrently, we may observe new values.
+
+    Keys will be a tuple of (key: usize, generation: usize) where key will be in a range [0...K-1]
+    and generation is some monotonically increasing number.
+
+    Insertions will pick a random key and set the generation to 1 + the last generation number
+    inserted for that key.
+
+    At the beginning of a read, a snapshot of last inserted generation numbers for each key is
+    taken. Read activities are then commenced. For every key encountered, we check that it is
+    either expected given the initial snapshot or has been added since the reader started reading.
+
+    [concurrent test]: https://github.com/google/leveldb/blob/e426c83e88c4babc785098d905c2dcb4f4e884af/db/skiplist_test.cc#L128
+    */
+    #[test]
+    fn with_concurrent_threads_readers_see_correct_values() {}
+
+    #[derive(Clone)]
+    struct Snapshot {
+        generations: [Arc<AtomicUsize>; NUM_KEYS],
+    }
+
+    impl Snapshot {
+        /// Create a new instance of [`Snapshot`].
+        fn new() -> Self {
+            let generations: [Arc<AtomicUsize>; NUM_KEYS] =
+                iter::repeat_with(|| Arc::new(AtomicUsize::new(0)))
+                    .take(4)
+                    .collect::<Vec<Arc<AtomicUsize>>>()
+                    .try_into()
+                    .unwrap();
+
+            Self { generations }
+        }
+
+        /// Set the generation number of a key.
+        fn set(&mut self, k: usize, generation: usize) {
+            self.generations[k].store(generation, atomic::Ordering::Release);
+        }
+
+        /// Get the generation number of a key.
+        fn get(&self, k: usize) -> usize {
+            self.generations[k].load(atomic::Ordering::Acquire)
+        }
+    }
+
+    /// The state of a reader thread.
+    enum ReaderState {
+        Started,
+        Running,
+        Done,
+    }
+
+    struct TestHarness {
+        stop_flag: Arc<AtomicBool>,
+        random_seed: u64,
+        skiplist: Arc<ConcurrentSkipList<(usize, usize), String>>,
+        current_snapshot: Snapshot,
+    }
+
+    impl TestHarness {
+        fn new() -> Self {
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            // 0x726f62696e => Robin, Batmann's real life companion :)
+            let random_seed = 0x726f62696e;
+            let skiplist = Arc::new(ConcurrentSkipList::<(usize, usize), String>::new(None));
+            let current_snapshot = Snapshot::new();
+
+            Self {
+                stop_flag,
+                random_seed,
+                skiplist,
+                current_snapshot,
+            }
+        }
+
+        fn concurrent_reader(harness: Arc<TestHarness>, thread_seed: u64) {
+            while !harness.stop_flag.load(atomic::Ordering::Acquire) {
+                harness.read_step(thread_seed);
+            }
+        }
+
+        fn read_step(&self, seed: u64) {
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            // Remember the initial state of the skip list
+            let mut snapshot = Snapshot::new();
+            for key in 0..NUM_KEYS {
+                snapshot.set(key, self.current_snapshot.get(key));
+            }
+
+            let zero_gen = 0.to_string();
+            let mut start_read_range = TestHarness::get_random_start_position(&mut rng);
+            let mut iterator = self.skiplist.iter().peekable();
+            let mut end_of_read_range: &(usize, usize);
+
+            // Move iterator to the start of the read range
+            iterator.position(|(key, _)| key >= &start_read_range);
+
+            loop {
+                // Set end of read range to the last element if our starting position is at the last
+                // element.
+                end_of_read_range = self
+                    .skiplist
+                    .find_greater_or_equal(&start_read_range)
+                    .or(Some((&(NUM_KEYS, 0), &zero_gen)))
+                    .unwrap()
+                    .0;
+
+                assert!(
+                    &start_read_range <= end_of_read_range,
+                    "The end of the range cannot go backwards"
+                );
+
+                /*
+                Verify that every thing from [start_read_range, end_of_read_range) was not
+                present in the initial state. Generation number 0 is never inserted so the end of
+                the range was the greatest at the point in time. Anything within the range was
+                added by a concurrent writer.
+                */
+                while (&start_read_range < end_of_read_range) {}
+
+                if iterator.peek().is_none() {
+                    break;
+                }
+            }
+        }
+
+        fn write_step(&mut self, seed: u64) {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let key: usize = (rng.next_u64() % (NUM_KEYS as u64)) as usize;
+            let generation_number = self.current_snapshot.get(key) + 1;
+
+            // SAFETY: Only one thread is writing
+            unsafe {
+                self.skiplist
+                    .insert((key, generation_number), generation_number.to_string());
+            }
+
+            self.current_snapshot.set(key, generation_number);
+        }
+
+        fn get_random_start_position(rng: &mut StdRng) -> (usize, usize) {
+            match rng.next_u32() % 10 {
+                0 => {
+                    // Start at the beginning
+                    (0, 0)
+                }
+                1 => {
+                    // Start at the end
+                    (NUM_KEYS, 0)
+                }
+                _ => {
+                    // Start somewhere in the middle
+                    ((rng.next_u32() % 10) as usize, 0)
+                }
+            }
+        }
+    }
+}
