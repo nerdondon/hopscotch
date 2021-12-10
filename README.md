@@ -20,6 +20,9 @@ flip a coin). The geometric distrubution actually defaults to p = 0.25 but this 
 
 ### Concurrency
 
+**NOTE**: There may be a measure of undefined behavior here (sounds bad I know). Don't use this
+unless you really want to try some crazy hack I did.
+
 A version of the skip list that allows for lock-free concurrent reads is now available by turning on
 the `concurrent` feature. This skip list has a couple major feature gaps:
 
@@ -27,6 +30,9 @@ the `concurrent` feature. This skip list has a couple major feature gaps:
    done.
 
 1. Delete has not been implemented yet because my use case does not require delete.
+
+Work is planned to follow this up with a proper implementation of a fully concurrent and
+almost-lock-free skip list.
 
 ## Other art
 

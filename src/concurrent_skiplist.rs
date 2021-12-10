@@ -5,6 +5,7 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::iter::FusedIterator;
 use std::mem;
+use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
 
 type Link<K, V> = Option<*mut SkipNode<K, V>>;
@@ -119,8 +120,8 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
 /// [`Ordering::Release`]: std::sync::atomic::Ordering
 #[derive(Debug)]
 pub struct ConcurrentSkipList<K: Ord + Debug, V: Clone> {
-    /// A dummy head node.
-    head: Box<SkipNode<K, V>>,
+    /// A pointer to a dummy head node.
+    head_ptr: NonNull<SkipNode<K, V>>,
     /// The number of elements in the skip list.
     length: AtomicUsize,
     /// The probability of success used in probability distribution for determining height of a new
@@ -144,13 +145,14 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// let skiplist = SkipList::<i32, String>::new(None);
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
-        let head = Box::new(SkipNode::head());
+        let mut head = Box::new(SkipNode::head());
         let skiplist = ConcurrentSkipList {
-            head,
+            head_ptr: NonNull::new(head.as_mut()).unwrap(),
             length: AtomicUsize::new(0),
             probability: probability.unwrap_or(0.25),
             approximate_mem_usage: AtomicUsize::new(0),
         };
+        Box::leak(head);
 
         // TODO: Make size tracking a feature?
         let size = mem::size_of_val(&skiplist) + mem::size_of::<SkipNode<K, V>>();
@@ -181,7 +183,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
 
     /// Insert a key-value pair.
     ///
-    /// # Concurrency
+    /// # Safety
     ///
     /// The caller must have an external lock on this skiplist in order to safely call this method.
     ///
@@ -189,7 +191,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// ```
     /// use nerdondon_hopscotch::skiplist::ConcurrentSkiplist;
     ///
-    /// let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+    /// let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
     /// skiplist.insert(2, "banana".to_string());
     /// skiplist.insert(3, "orange".to_string());
     /// skiplist.insert(1, "apple".to_string());
@@ -197,7 +199,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// let some_value = skiplist.get(&2).unwrap();
     /// assert_eq!(some_value, "banana");
     /// ```
-    pub fn insert(&mut self, key: K, value: V) {
+    pub unsafe fn insert(&self, key: K, value: V) {
         let new_node_height = self.random_height();
         if new_node_height > self.height() {
             self.adjust_head(new_node_height);
@@ -206,16 +208,14 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
         // Track where we end on each level
         let mut nodes_to_update: Vec<Option<*mut SkipNode<K, V>>> = vec![None; self.height()];
         let list_height = self.height();
-        let mut current_node_ptr: *mut _ = self.head.as_mut();
+        let mut current_node_ptr: *mut _ = self.head_mut();
 
         // Start iteration at the top of the skip list "towers" and find the insert position at each
         // level
         for level_idx in (0..list_height).rev() {
             // Get an optional of the next node
-            let mut maybe_next_node = unsafe {
-                // SAFETY: we have a lock
-                (*current_node_ptr).next_at_level_mut(level_idx)
-            };
+            // SAFETY: It is safe to dereference the raw pointer because we have a lock
+            let mut maybe_next_node = (*current_node_ptr).next_at_level_mut(level_idx);
 
             while let Some(next_node) = maybe_next_node {
                 match next_node.key.as_ref().unwrap().cmp(&key) {
@@ -241,15 +241,13 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
         let mut new_node = Box::new(SkipNode::new(key, value, new_node_height));
         let new_node_ptr = new_node.as_mut() as *mut SkipNode<K, V>;
         for level_idx in (0..new_node_height).rev() {
-            let previous_node = unsafe {
-                /*
-                SAFETY:
-                Dereferencing the *mut is ok here because we have exclusive access to modifying the
-                node pointers and we casted into a *mut above. The node we casted is from a pointer
-                that we got via an acquire load which also ensure validity.
-                */
-                &mut **(nodes_to_update[level_idx].as_mut().unwrap())
-            };
+            /*
+            SAFETY:
+            Dereferencing the *mut is ok here because we have exclusive access to modifying the
+            node pointers and we casted into a *mut above. The node we casted is from a pointer
+            that we got via an acquire load which also ensure validity.
+            */
+            let previous_node = &mut **(nodes_to_update[level_idx].as_mut().unwrap());
 
             // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
             // node at this level becomes `new_node`'s next node at this level
@@ -305,7 +303,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the key and value of the first node in the skip list if there is a
     /// node. Otherwise, it returns `None`.
     pub fn first(&self) -> Option<(&K, &V)> {
-        self.head
+        self.head()
             .next()
             .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
     }
@@ -317,7 +315,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
             return None;
         }
 
-        let mut current_node = self.head.as_ref();
+        let mut current_node = self.head();
         for level_idx in (0..self.height()).rev() {
             let mut maybe_next_node = current_node.next_at_level(level_idx);
             while let Some(next_node) = maybe_next_node {
@@ -355,7 +353,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
             return NodeIterHelper { next: None };
         }
 
-        let next = self.head.next();
+        let next = self.head().next();
 
         NodeIterHelper { next }
     }
@@ -373,7 +371,7 @@ where
     /// ```
     /// use nerdondon_hopscotch::skiplist::ConcurrentSkiplist;
     ///
-    /// let mut skiplist = ConcurrentSkiplist::<i32, String>::new(None);
+    /// let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
     /// skiplist.insert(2, "banana".to_string());
     /// skiplist.insert(3, "orange".to_string());
     /// skiplist.insert(1, "apple".to_string());
@@ -410,9 +408,25 @@ where
 
 // Private methods of SkipList
 impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
+    /// Return a reference to the head node.
+    fn head(&self) -> &SkipNode<K, V> {
+        // SAFTEY: This is safe because the head is always guaranteed to exist.
+        unsafe { self.head_ptr.as_ref() }
+    }
+
+    /// Return a mutable reference to the head node.
+    ///
+    /// FIXME: I'm just doing this to keep my other project going. We don't really care about a
+    /// data race because we assert that a lock is around insert. Porting C++ to Rust kinda hurts :/
+    #[allow(clippy::mut_from_ref)]
+    fn head_mut(&self) -> &mut SkipNode<K, V> {
+        // SAFTEY: This is safe because the head is always guaranteed to exist.
+        unsafe { &mut *self.head_ptr.as_ptr() }
+    }
+
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
-        self.head.levels.len()
+        self.head().levels.len()
     }
 
     /// Generates a random height according to a geometric distribution.
@@ -433,19 +447,19 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     }
 
     /// Adjust the levels stored in head to match a new height.
-    fn adjust_head(&mut self, new_height: usize) {
+    fn adjust_head(&self, new_height: usize) {
         if self.height() >= new_height {
             return;
         }
 
         let height_difference = new_height - self.height();
         for _ in 0..height_difference {
-            self.head.levels.push(None);
+            self.head_mut().levels.push(None);
         }
     }
 
     /// Increment length by 1.
-    fn inc_length(&mut self) {
+    fn inc_length(&self) {
         self.length.fetch_add(1, atomic::Ordering::AcqRel);
     }
 
@@ -455,7 +469,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
             return None;
         }
 
-        let mut current_node = self.head.as_ref();
+        let mut current_node = self.head();
         // Start iteration at the top of the skip list "towers" and iterate through pointers at the
         // current level. If we skipped past our key, move down a level.
         for level_idx in (0..self.height()).rev() {
@@ -571,7 +585,10 @@ where
             return;
         }
 
-        let mut maybe_node_ptr = self.head.as_mut().levels[0].as_mut().map(|node_ptr| {
+        // SAFETY: This is safe be cause the head is guaranteed to always exist.
+        let mut head = unsafe { Box::from_raw(self.head_ptr.as_ptr()) };
+
+        let mut maybe_node_ptr = head.as_mut().levels[0].as_mut().map(|node_ptr| {
             // Get atomic access to the underlying pointer
             let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
             atomic_ptr.load(atomic::Ordering::Acquire)
@@ -635,104 +652,128 @@ mod tests {
 
     #[test]
     fn with_an_empty_skiplist_insert_can_add_an_element() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
+        let skiplist = ConcurrentSkipList::<i32, String>::new(None);
 
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe { skiplist.insert(1, "apple".to_string()) };
 
         assert_eq!(skiplist.len(), 1);
     }
 
     #[test]
     fn insert_can_add_an_element_after_an_existing_element() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(1, "apple".to_string());
 
-        skiplist.insert(2, "banana".to_string());
+            skiplist.insert(2, "banana".to_string());
 
-        assert_eq!(skiplist.len(), 2);
+            assert_eq!(skiplist.len(), 2);
+        }
     }
 
     #[test]
     fn insert_can_add_an_element_before_an_existing_element() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
 
-        skiplist.insert(1, "apple".to_string());
+            skiplist.insert(1, "apple".to_string());
 
-        assert_eq!(skiplist.len(), 2);
+            assert_eq!(skiplist.len(), 2);
+        }
     }
 
     #[test]
     fn insert_can_add_an_element_between_existing_elements() {
-        // TODO: Mock distribution
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
 
-        skiplist.insert(2, "banana".to_string());
+            skiplist.insert(2, "banana".to_string());
 
-        assert_eq!(skiplist.len(), 3);
+            assert_eq!(skiplist.len(), 3);
+        }
     }
 
     #[test]
     fn get_an_element_at_the_head() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(2, "banana".to_string());
-        let expected_value = "apple".to_string();
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(2, "banana".to_string());
+            let expected_value = "apple".to_string();
 
-        let actual_value = skiplist.get(&1).unwrap();
+            let actual_value = skiplist.get(&1).unwrap();
 
-        assert_eq!(&expected_value, actual_value);
+            assert_eq!(&expected_value, actual_value);
+        }
     }
 
     #[test]
     fn get_an_element_in_the_middle() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(3, "orange".to_string());
-        let expected_value = "banana".to_string();
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(3, "orange".to_string());
+            let expected_value = "banana".to_string();
 
-        let actual_value = skiplist.get(&2).unwrap();
+            let actual_value = skiplist.get(&2).unwrap();
 
-        assert_eq!(&expected_value, actual_value);
+            assert_eq!(&expected_value, actual_value);
+        }
     }
 
     #[test]
     fn get_an_element_at_the_tail() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
-        let expected_value = "orange".to_string();
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
+            let expected_value = "orange".to_string();
 
-        let actual_value = skiplist.get(&3).unwrap();
+            let actual_value = skiplist.get(&3).unwrap();
 
-        assert_eq!(&expected_value, actual_value);
+            assert_eq!(&expected_value, actual_value);
+        }
     }
 
     #[test]
     fn with_a_non_empty_skiplist_getting_a_non_existent_element_returns_none() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
 
-        let actual_value = skiplist.get(&0);
+            let actual_value = skiplist.get(&0);
 
-        assert_eq!(None, actual_value);
+            assert_eq!(None, actual_value);
+        }
     }
 
     #[test]
     fn with_a_non_empty_skiplist_is_empty_returns_false() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
 
-        assert_eq!(skiplist.is_empty(), false);
+            assert_eq!(skiplist.is_empty(), false);
+        }
     }
 
     #[test]
@@ -747,64 +788,73 @@ mod tests {
 
     #[test]
     fn entries_returns_a_vec_with_the_key_value_pairs_of_elements() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
 
-        let actual_value = skiplist.entries();
+            let actual_value = skiplist.entries();
 
-        assert_eq!(actual_value.len(), 3);
-        assert_eq!(
-            actual_value,
-            [
-                (1, "apple".to_string()),
-                (2, "banana".to_string()),
-                (3, "orange".to_string())
-            ]
-        );
+            assert_eq!(actual_value.len(), 3);
+            assert_eq!(
+                actual_value,
+                [
+                    (1, "apple".to_string()),
+                    (2, "banana".to_string()),
+                    (3, "orange".to_string())
+                ]
+            );
+        }
     }
 
     #[test]
     fn get_approx_mem_usage_provides_decent_estimates() {
-        // Note that these estimates have only just some basis in reality. We do not attempt to get
-        // too crazy with the estimates. Just make sure the numbers are somewhat sane.
+        // SAFETY: Single thread insert
+        unsafe {
+            // Note that these estimates have only just some basis in reality. We do not attempt to get
+            // too crazy with the estimates. Just make sure the numbers are somewhat sane.
 
-        // Approximated initial usage
-        // size of head node
-        //   = 1 (None) + 1 (None) + 3 (vec pointer) + 0 (empty vec actual size) = 26
-        // size of SkipList = 8 (length) + 8 (probability) + 8 (approx_mem_usage)  = 24
-        let approx_initial_usage: usize = 50;
+            // Approximated initial usage
+            // size of head node
+            //   = 1 (None) + 1 (None) + 3 (vec pointer) + 0 (empty vec actual size) = 26
+            // size of SkipList = 8 (length) + 8 (probability) + 8 (approx_mem_usage)  = 24
+            let approx_initial_usage: usize = 50;
 
-        // Approximate node size
-        // size of `levels` actually = height of the skiplist * size of `Link`
-        let base_node_usage: usize = mem::size_of::<SkipNode<u16, String>>();
-        let link_size = mem::size_of::<Link<u16, String>>();
+            // Approximate node size
+            // size of `levels` actually = height of the skiplist * size of `Link`
+            let base_node_usage: usize = mem::size_of::<SkipNode<u16, String>>();
+            let link_size = mem::size_of::<Link<u16, String>>();
 
-        let mut usage_approximation = approx_initial_usage;
+            let mut usage_approximation = approx_initial_usage;
 
-        let mut skiplist = ConcurrentSkipList::<u16, String>::new(None);
-        assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
+            let skiplist = ConcurrentSkipList::<u16, String>::new(None);
+            assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
 
-        skiplist.insert(1, "apple".to_string());
-        usage_approximation += base_node_usage + 7 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+            skiplist.insert(1, "apple".to_string());
+            usage_approximation += base_node_usage + 7 + skiplist.height() * link_size;
+            assert!(skiplist.get_approx_mem_usage() > usage_approximation);
 
-        skiplist.insert(2, "banana".to_string());
-        usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+            skiplist.insert(2, "banana".to_string());
+            usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
+            assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+        }
     }
 
     #[test]
     fn with_a_non_empty_skiplist_first_returns_references_to_the_first_key_value_pair() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(4, "strawberry".to_string());
-        skiplist.insert(5, "watermelon".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(4, "strawberry".to_string());
+            skiplist.insert(5, "watermelon".to_string());
 
-        assert_eq!(skiplist.first(), Some((&1, &"apple".to_string())));
+            assert_eq!(skiplist.first(), Some((&1, &"apple".to_string())));
+        }
     }
 
     #[test]
@@ -816,14 +866,17 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_last_returns_references_to_the_last_key_value_pair() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(4, "strawberry".to_string());
-        skiplist.insert(5, "watermelon".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(4, "strawberry".to_string());
+            skiplist.insert(5, "watermelon".to_string());
 
-        assert_eq!(skiplist.last(), Some((&5, &"watermelon".to_string())));
+            assert_eq!(skiplist.last(), Some((&5, &"watermelon".to_string())));
+        }
     }
 
     #[test]
@@ -835,76 +888,82 @@ mod tests {
 
     #[test]
     fn with_a_non_empty_skiplist_find_greater_or_equal_returns_correct_responses() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(4, "strawberry".to_string());
-        skiplist.insert(5, "watermelon".to_string());
-        skiplist.insert(11, "grapefruit".to_string());
-        skiplist.insert(12, "mango".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(4, "strawberry".to_string());
+            skiplist.insert(5, "watermelon".to_string());
+            skiplist.insert(11, "grapefruit".to_string());
+            skiplist.insert(12, "mango".to_string());
 
-        // First element exists so it is found
-        assert_eq!(
-            skiplist.find_greater_or_equal(&1),
-            Some((&1, &"apple".to_string()))
-        );
+            // First element exists so it is found
+            assert_eq!(
+                skiplist.find_greater_or_equal(&1),
+                Some((&1, &"apple".to_string()))
+            );
 
-        // Middle element exists so it is found
-        assert_eq!(
-            skiplist.find_greater_or_equal(&3),
-            Some((&3, &"orange".to_string()))
-        );
+            // Middle element exists so it is found
+            assert_eq!(
+                skiplist.find_greater_or_equal(&3),
+                Some((&3, &"orange".to_string()))
+            );
 
-        // Target doesn't exist so it finds a greatest
-        assert_eq!(
-            skiplist.find_greater_or_equal(&7),
-            Some((&11, &"grapefruit".to_string()))
-        );
+            // Target doesn't exist so it finds a greatest
+            assert_eq!(
+                skiplist.find_greater_or_equal(&7),
+                Some((&11, &"grapefruit".to_string()))
+            );
 
-        // Last element exists so it is found
-        assert_eq!(
-            skiplist.find_greater_or_equal(&12),
-            Some((&12, &"mango".to_string()))
-        );
+            // Last element exists so it is found
+            assert_eq!(
+                skiplist.find_greater_or_equal(&12),
+                Some((&12, &"mango".to_string()))
+            );
 
-        // Greater than last element so it returns `None`
-        assert_eq!(skiplist.find_greater_or_equal(&20), None);
+            // Greater than last element so it returns `None`
+            assert_eq!(skiplist.find_greater_or_equal(&20), None);
+        }
     }
 
     #[test]
     fn with_a_non_empty_skiplist_find_less_than_returns_correct_responses() {
-        let mut skiplist = ConcurrentSkipList::<i32, String>::new(None);
-        skiplist.insert(2, "banana".to_string());
-        skiplist.insert(3, "orange".to_string());
-        skiplist.insert(1, "apple".to_string());
-        skiplist.insert(4, "strawberry".to_string());
-        skiplist.insert(5, "watermelon".to_string());
-        skiplist.insert(11, "grapefruit".to_string());
-        skiplist.insert(12, "mango".to_string());
+        // SAFETY: Single thread insert
+        unsafe {
+            let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+            skiplist.insert(2, "banana".to_string());
+            skiplist.insert(3, "orange".to_string());
+            skiplist.insert(1, "apple".to_string());
+            skiplist.insert(4, "strawberry".to_string());
+            skiplist.insert(5, "watermelon".to_string());
+            skiplist.insert(11, "grapefruit".to_string());
+            skiplist.insert(12, "mango".to_string());
 
-        // Finding a target less than every element in the list returns `None`
-        assert_eq!(skiplist.find_less_than(&0), None);
+            // Finding a target less than every element in the list returns `None`
+            assert_eq!(skiplist.find_less_than(&0), None);
 
-        // Finding a target less than the first element returns `None`
-        assert_eq!(skiplist.find_less_than(&1), None);
+            // Finding a target less than the first element returns `None`
+            assert_eq!(skiplist.find_less_than(&1), None);
 
-        // Finding a target less than an existing middle element
-        assert_eq!(
-            skiplist.find_less_than(&3),
-            Some((&2, &"banana".to_string()))
-        );
+            // Finding a target less than an existing middle element
+            assert_eq!(
+                skiplist.find_less_than(&3),
+                Some((&2, &"banana".to_string()))
+            );
 
-        // Finding a target less than a non-existent middle element
-        assert_eq!(
-            skiplist.find_less_than(&7),
-            Some((&5, &"watermelon".to_string()))
-        );
+            // Finding a target less than a non-existent middle element
+            assert_eq!(
+                skiplist.find_less_than(&7),
+                Some((&5, &"watermelon".to_string()))
+            );
 
-        // Finding a target greater than all elements returns the last element
-        assert_eq!(
-            skiplist.find_less_than(&20),
-            Some((&12, &"mango".to_string()))
-        );
+            // Finding a target greater than all elements returns the last element
+            assert_eq!(
+                skiplist.find_less_than(&20),
+                Some((&12, &"mango".to_string()))
+            );
+        }
     }
 }
