@@ -521,7 +521,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
                         // the first greatest node after our target by breaking and moving one
                         // level down in the tower.
                         break;
-                    },
+                    }
                 }
             }
         }
@@ -1001,9 +1001,9 @@ mod concurrency_tests {
     use super::*;
     use rand::RngCore;
     use std::iter;
-    use std::thread;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::thread;
     use std::time::Duration;
 
     const NUM_KEYS: usize = 4;
@@ -1035,13 +1035,13 @@ mod concurrency_tests {
             if run % 100 == 0 {
                 println!("Run {} of {}", run, num_runs);
             }
-            
+
             let harness = Arc::new(TestHarness::new());
             let cloned_harness = Arc::clone(&harness);
-            let handle = thread::spawn (move||{ 
+            let handle = thread::spawn(move || {
                 TestHarness::concurrent_reader(cloned_harness);
             });
-            
+
             // Give some time for the reader thread to spin up
             thread::sleep(Duration::from_millis(50));
 
@@ -1137,7 +1137,7 @@ mod concurrency_tests {
             let mut start_read_range = TestHarness::get_random_start_position(&mut rng);
             let mut iterator = self.skiplist.iter().peekable();
             let mut end_of_read_range: &(usize, usize);
-            
+
             // Move iterator to the start of the read range
             iterator.position(|(key, _)| key >= &start_read_range);
 
@@ -1167,14 +1167,14 @@ mod concurrency_tests {
                 */
                 while &start_read_range < end_of_read_range {
                     assert!(
-                        start_read_range.0 < NUM_KEYS, 
+                        start_read_range.0 < NUM_KEYS,
                         "This should be trivially true because we take a modulo when determining keys to insert."
                     );
 
                     // The zero generation is never inserted so it is ok to be missing.
                     let initial_generation = self.current_snapshot.get(start_read_range.0);
                     assert!(
-                        start_read_range.1 == 0 || start_read_range.1 > initial_generation, 
+                        start_read_range.1 == 0 || start_read_range.1 > initial_generation,
                         "Expected to have a generation of 0 or a generation greater than the initial generation ({}) but got {}.",
                         initial_generation,
                         start_read_range.1
@@ -1205,7 +1205,7 @@ mod concurrency_tests {
                     start_read_range = (start_read_range.0, start_read_range.1 + 1);
                     iterator.next();
                 } else {
-                    let new_target  = TestHarness::get_random_start_position(&mut rng);
+                    let new_target = TestHarness::get_random_start_position(&mut rng);
                     if new_target > start_read_range {
                         // Move forward by some random new target
                         start_read_range = new_target;
