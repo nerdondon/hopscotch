@@ -999,11 +999,12 @@ mod tests {
 #[cfg(test)]
 mod concurrency_tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use rand::RngCore;
     use std::iter;
+    use std::thread;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::time::Duration;
 
     const NUM_KEYS: usize = 4;
 
@@ -1027,9 +1028,34 @@ mod concurrency_tests {
     [concurrent test]: https://github.com/google/leveldb/blob/e426c83e88c4babc785098d905c2dcb4f4e884af/db/skiplist_test.cc#L128
     */
     #[test]
-    fn with_concurrent_threads_readers_see_correct_values() {}
+    fn with_concurrent_threads_readers_see_correct_values() {
+        let num_runs = 1000;
+        let num_writes = 1000;
+        for run in 0..1000 {
+            if run % 100 == 0 {
+                println!("Run {} of {}", run, num_runs);
+            }
+            
+            let harness = Arc::new(TestHarness::new());
+            let cloned_harness = Arc::clone(&harness);
+            let handle = thread::spawn (move||{ 
+                TestHarness::concurrent_reader(cloned_harness);
+            });
+            
+            // Give some time for the reader thread to spin up
+            thread::sleep(Duration::from_millis(50));
 
-    #[derive(Clone)]
+            // Perform writes
+            for _ in 0..num_writes {
+                harness.write_step();
+            }
+
+            harness.stop_flag.store(true, atomic::Ordering::Release);
+            handle.join().unwrap();
+        }
+    }
+
+    /// A snapshot of the current state of keys in the test.
     struct Snapshot {
         generations: [Arc<AtomicUsize>; NUM_KEYS],
     }
@@ -1048,7 +1074,7 @@ mod concurrency_tests {
         }
 
         /// Set the generation number of a key.
-        fn set(&mut self, k: usize, generation: usize) {
+        fn set(&self, k: usize, generation: usize) {
             self.generations[k].store(generation, atomic::Ordering::Release);
         }
 
@@ -1111,7 +1137,7 @@ mod concurrency_tests {
             let mut start_read_range = TestHarness::get_random_start_position(&mut rng);
             let mut iterator = self.skiplist.iter().peekable();
             let mut end_of_read_range: &(usize, usize);
-
+            
             // Move iterator to the start of the read range
             iterator.position(|(key, _)| key >= &start_read_range);
 
@@ -1160,7 +1186,7 @@ mod concurrency_tests {
                         If the key of the start of the range is less than the key of end of the
                         range, it means that our random start point did not yet exist in the
                         list. The next valid key would be a jump in key.
-                */
+                        */
                         start_read_range = (start_read_range.0 + 1, 0);
                     } else {
                         // The end range key cannot be larger than the start range key, so they are
