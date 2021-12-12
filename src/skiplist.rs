@@ -34,6 +34,30 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipNode<K, V> {
             levels: vec![],
         }
     }
+
+    /// Get an immutable reference to the next node at level 0 if it exists. Otherwise, `None`.
+    fn next(&self) -> Option<&SkipNode<K, V>> {
+        self.next_at_level(0)
+    }
+
+    /// Get an immutable reference to the next node at the specified level if it exists.
+    /// Otherwise, `None`.
+    fn next_at_level(&self, level: usize) -> Option<&SkipNode<K, V>> {
+        if self.levels.is_empty() {
+            return None;
+        }
+
+        self.levels[level].as_ref().map(|node_ptr| {
+            unsafe {
+                /*
+                SAFETY:
+                This is safe because links are guaranteed to exist. If the link did not exist, it
+                would be a `None` in the tower and execution would not have gotten here.
+                */
+                node_ptr.as_ref()
+            }
+        })
+    }
 }
 
 /// A skip list.
