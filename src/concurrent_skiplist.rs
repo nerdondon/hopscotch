@@ -1030,17 +1030,18 @@ mod concurrency_tests {
         }
     }
 
-    /// The state of a reader thread.
-    enum ReaderState {
-        Started,
-        Running,
-        Done,
-    }
-
+    /// A harness that holds test state information.
     struct TestHarness {
+        /// Flag to signal reader threads to stop.
         stop_flag: Arc<AtomicBool>,
+
+        /// Seed for random number generators.
         random_seed: u64,
+
+        /// The skip list under test.
         skiplist: Arc<ConcurrentSkipList<(usize, usize), String>>,
+
+        /// A snapshot of the current generation of keys.
         current_snapshot: Snapshot,
     }
 
