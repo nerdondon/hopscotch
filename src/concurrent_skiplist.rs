@@ -1045,6 +1045,7 @@ mod concurrency_tests {
     }
 
     impl TestHarness {
+        /// Create a new instance of [`TestHarness`].
         fn new() -> Self {
             let stop_flag = Arc::new(AtomicBool::new(false));
             // 0x726f62696e => Robin, Batmann's real life companion :)
@@ -1060,17 +1061,19 @@ mod concurrency_tests {
             }
         }
 
-        fn concurrent_reader(harness: Arc<TestHarness>, thread_seed: u64) {
+        /// The main task for reader threads.
+        fn concurrent_reader(harness: Arc<TestHarness>) {
             while !harness.stop_flag.load(atomic::Ordering::Acquire) {
-                harness.read_step(thread_seed);
+                harness.read_step(harness.random_seed);
             }
         }
 
+        /// Random reading logic to be performed by reader threads.
         fn read_step(&self, seed: u64) {
             let mut rng = StdRng::seed_from_u64(seed);
 
             // Remember the initial state of the skip list
-            let mut snapshot = Snapshot::new();
+            let snapshot = Snapshot::new();
             for key in 0..NUM_KEYS {
                 snapshot.set(key, self.current_snapshot.get(key));
             }
@@ -1095,25 +1098,73 @@ mod concurrency_tests {
 
                 assert!(
                     &start_read_range <= end_of_read_range,
-                    "The end of the range cannot go backwards"
+                    "The end of the range cannot go backwards. The start was {:?} and the end was {:?}.",
+                    &start_read_range,
+                    end_of_read_range
                 );
 
                 /*
                 Verify that every thing from [start_read_range, end_of_read_range) was not
                 present in the initial state. Generation number 0 is never inserted so the end of
                 the range was the greatest at the point in time. Anything within the range was
-                added by a concurrent writer.
+                added by a concurrent writer so must have a generation number greater than what is
+                in the initial state.
                 */
-                while (&start_read_range < end_of_read_range) {}
+                while &start_read_range < end_of_read_range {
+                    assert!(
+                        start_read_range.0 < NUM_KEYS, 
+                        "This should be trivially true because we take a modulo when determining keys to insert."
+                    );
+
+                    // The zero generation is never inserted so it is ok to be missing.
+                    let initial_generation = self.current_snapshot.get(start_read_range.0);
+                    assert!(
+                        start_read_range.1 == 0 || start_read_range.1 > initial_generation, 
+                        "Expected to have a generation of 0 or a generation greater than the initial generation ({}) but got {}.",
+                        initial_generation,
+                        start_read_range.1
+                    );
+
+                    // Advance to next key in the valid key space
+                    if start_read_range.0 < end_of_read_range.0 {
+                        /*
+                        If the key of the start of the range is less than the key of end of the
+                        range, it means that our random start point did not yet exist in the
+                        list. The next valid key would be a jump in key.
+                */
+                        start_read_range = (start_read_range.0 + 1, 0);
+                    } else {
+                        // The end range key cannot be larger than the start range key, so they are
+                        // equal. The only valid advance is through the generation numbers.
+                        start_read_range = (start_read_range.0, start_read_range.1 + 1);
+                    }
+                }
 
                 if iterator.peek().is_none() {
                     break;
                 }
+
+                // Move the iterator forward by some arbitrary amount
+                if rng.next_u32() % 2 == 0 {
+                    // Just increase the generation we do reads from or set it to the last element
+                    start_read_range = (start_read_range.0, start_read_range.1 + 1);
+                    iterator.next();
+                } else {
+                    let new_target  = TestHarness::get_random_start_position(&mut rng);
+                    if new_target > start_read_range {
+                        // Move forward by some random new target
+                        start_read_range = new_target;
+
+                        // Move iterator to the start of the read range
+                        iterator.position(|(key, _)| key >= &start_read_range);
+                    }
+                }
             }
         }
 
-        fn write_step(&mut self, seed: u64) {
-            let mut rng = StdRng::seed_from_u64(seed);
+        // Action for inserting a node with a random key at its next generation number.
+        fn write_step(&self) {
+            let mut rng = StdRng::seed_from_u64(self.random_seed);
             let key: usize = (rng.next_u64() % (NUM_KEYS as u64)) as usize;
             let generation_number = self.current_snapshot.get(key) + 1;
 
@@ -1126,6 +1177,7 @@ mod concurrency_tests {
             self.current_snapshot.set(key, generation_number);
         }
 
+        /// Get a random position to start reads from.
         fn get_random_start_position(rng: &mut StdRng) -> (usize, usize) {
             match rng.next_u32() % 10 {
                 0 => {
@@ -1138,7 +1190,7 @@ mod concurrency_tests {
                 }
                 _ => {
                     // Start somewhere in the middle
-                    ((rng.next_u32() % 10) as usize, 0)
+                    ((rng.next_u64() % (NUM_KEYS as u64)) as usize, 0)
                 }
             }
         }
