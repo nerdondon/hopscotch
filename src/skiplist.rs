@@ -398,6 +398,36 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
 
         NodeIterMutHelper { next }
     }
+
+    /// Return a reference to the key and value of the first node in the skip list if there is a
+    /// node. Otherwise, it returns `None`.
+    pub fn first(&self) -> Option<(&K, &V)> {
+        self.head
+            .next()
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+    }
+
+    /// Return a reference to the key and value of the last node in the skip list if there is a
+    /// node. Otherwise, it returns `None`.
+    pub fn last(&self) -> Option<(&K, &V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = &*self.head;
+        for level_idx in (0..self.height()).rev() {
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+            while let Some(next_node) = maybe_next_node {
+                current_node = next_node;
+                maybe_next_node = next_node.next_at_level(level_idx);
+            }
+        }
+
+        Some((
+            current_node.key.as_ref().unwrap(),
+            current_node.value.as_ref().unwrap(),
+        ))
+    }
 }
 
 /// Implementation for keys and values that implement `Clone`
@@ -905,5 +935,43 @@ mod tests {
         skiplist.remove(&2);
         usage_approximation -= base_node_usage + 8 + skiplist.height() * link_size;
         assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_first_returns_references_to_the_first_key_value_pair() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+
+        assert_eq!(skiplist.first(), Some((&1, &"apple".to_string())));
+    }
+
+    #[test]
+    fn with_an_empty_skiplist_first_returns_none() {
+        let skiplist = SkipList::<i32, String>::new(None);
+
+        assert_eq!(skiplist.first(), None);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_last_returns_references_to_the_last_key_value_pair() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+
+        assert_eq!(skiplist.last(), Some((&5, &"watermelon".to_string())));
+    }
+
+    #[test]
+    fn with_an_empty_skiplist_last_returns_none() {
+        let skiplist = SkipList::<i32, String>::new(None);
+
+        assert_eq!(skiplist.last(), None);
     }
 }
