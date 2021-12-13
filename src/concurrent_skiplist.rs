@@ -7,8 +7,9 @@ use std::iter::FusedIterator;
 use std::mem;
 use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
+use std::sync::Arc;
 
-type Link<K, V> = Option<*mut SkipNode<K, V>>;
+type Link<K, V> = Option<Arc<AtomicPtr<SkipNode<K, V>>>>;
 
 /// A node in the skip list.
 #[derive(Debug)]
@@ -51,9 +52,7 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
         }
 
         self.levels[level].as_ref().and_then(|node_ptr| {
-            // Get atomic access to the underlying pointer
-            let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
-            let maybe_node = atomic_ptr.load(atomic::Ordering::Acquire);
+            let maybe_node = node_ptr.load(atomic::Ordering::Acquire);
 
             unsafe {
                 /*
@@ -76,9 +75,7 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
         }
 
         self.levels[level].as_mut().and_then(|node_ptr| {
-            // Get atomic access to the underlying pointer
-            let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
-            let maybe_node = atomic_ptr.load(atomic::Ordering::Acquire);
+            let maybe_node = node_ptr.load(atomic::Ordering::Acquire);
 
             unsafe {
                 /*
@@ -251,10 +248,26 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
 
             // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
             // node at this level becomes `new_node`'s next node at this level
-            new_node.levels[level_idx] = previous_node.levels[level_idx].take();
+            new_node.levels[level_idx] =
+                previous_node.levels[level_idx]
+                    .as_ref()
+                    .map(|next_node_atomic_ptr| {
+                        let underlying_ptr = next_node_atomic_ptr.load(atomic::Ordering::Acquire);
+                        Arc::new(AtomicPtr::from(underlying_ptr))
+                    });
 
             // Set the next pointer of the previous node to the new node
-            previous_node.levels[level_idx] = Some(new_node_ptr);
+            match previous_node.levels[level_idx].as_ref() {
+                Some(prev_node_next_ptr) => {
+                    // If there was an existing pointer at this level, atomically replace the
+                    // pointer
+                    prev_node_next_ptr.store(new_node_ptr, atomic::Ordering::Release);
+                }
+                None => {
+                    // There was not an existing pointer at this level
+                    previous_node.levels[level_idx] = Some(Arc::new(AtomicPtr::new(new_node_ptr)));
+                }
+            }
         }
 
         // Book keeping for size
@@ -614,13 +627,11 @@ where
         }
 
         // SAFETY: This is safe be cause the head is guaranteed to always exist.
-        let mut head = unsafe { Box::from_raw(self.head_ptr.as_ptr()) };
+        let head = unsafe { Box::from_raw(self.head_ptr.as_ptr()) };
 
-        let mut maybe_node_ptr = head.as_mut().levels[0].as_mut().map(|node_ptr| {
-            // Get atomic access to the underlying pointer
-            let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
-            atomic_ptr.load(atomic::Ordering::Acquire)
-        });
+        let mut maybe_node_ptr = head.levels[0]
+            .as_ref()
+            .map(|node_ptr| node_ptr.load(atomic::Ordering::Acquire));
 
         while maybe_node_ptr.is_some() {
             let current_node_ptr = maybe_node_ptr.unwrap();
@@ -636,7 +647,7 @@ where
             It is ok to leave pointers in the dropped node's levels vector dangling because all
             nodes are getting dropped.
             */
-            let mut current_node = unsafe {
+            let current_node = unsafe {
                 /*
                 SAFETY:
                 We check that there is a pointer in the option before entering the loop which
@@ -646,11 +657,9 @@ where
                 Box::from_raw(current_node_ptr)
             };
 
-            maybe_node_ptr = current_node.levels[0].as_mut().map(|node_ptr| {
-                // Get atomic access to the underlying pointer
-                let atomic_ptr: AtomicPtr<SkipNode<K, V>> = AtomicPtr::from(*node_ptr);
-                atomic_ptr.load(atomic::Ordering::Acquire)
-            });
+            maybe_node_ptr = current_node.levels[0]
+                .as_ref()
+                .map(|node_ptr| node_ptr.load(atomic::Ordering::Acquire));
         }
     }
 }
