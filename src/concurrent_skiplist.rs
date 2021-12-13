@@ -927,32 +927,35 @@ mod tests {
             skiplist.insert(11, "grapefruit".to_string());
             skiplist.insert(12, "mango".to_string());
 
-            // First element exists so it is found
             assert_eq!(
                 skiplist.find_greater_or_equal(&1),
-                Some((&1, &"apple".to_string()))
+                Some((&1, &"apple".to_string())),
+                "The target is the first element so it should be found"
             );
 
-            // Middle element exists so it is found
             assert_eq!(
                 skiplist.find_greater_or_equal(&3),
-                Some((&3, &"orange".to_string()))
+                Some((&3, &"orange".to_string())),
+                "The middle element exists so it should be found"
             );
 
-            // Target doesn't exist so it finds a greatest
             assert_eq!(
                 skiplist.find_greater_or_equal(&7),
-                Some((&11, &"grapefruit".to_string()))
+                Some((&11, &"grapefruit".to_string())),
+                "The target does not exist but there is a greater node so it should return that node"
             );
 
-            // Last element exists so it is found
             assert_eq!(
                 skiplist.find_greater_or_equal(&12),
-                Some((&12, &"mango".to_string()))
+                Some((&12, &"mango".to_string())),
+                "THe last element exists so it should be found"
             );
 
-            // Greater than last element so it returns `None`
-            assert_eq!(skiplist.find_greater_or_equal(&20), None);
+            assert_eq!(
+                skiplist.find_greater_or_equal(&20),
+                None,
+                "The target is greater than every element in the list so `None` should be returned"
+            );
         }
     }
 
@@ -969,28 +972,34 @@ mod tests {
             skiplist.insert(11, "grapefruit".to_string());
             skiplist.insert(12, "mango".to_string());
 
-            // Finding a target less than every element in the list returns `None`
-            assert_eq!(skiplist.find_less_than(&0), None);
+            assert_eq!(
+                skiplist.find_less_than(&0),
+                None,
+                "Finding a target less than every element in the list returns `None`"
+            );
 
-            // Finding a target less than the first element returns `None`
-            assert_eq!(skiplist.find_less_than(&1), None);
+            assert_eq!(
+                skiplist.find_less_than(&1),
+                None,
+                "Finding a target less than the first element returns `None`"
+            );
 
-            // Finding a target less than an existing middle element
             assert_eq!(
                 skiplist.find_less_than(&3),
-                Some((&2, &"banana".to_string()))
+                Some((&2, &"banana".to_string())),
+                "Finding a target less than an existing middle element"
             );
 
-            // Finding a target less than a non-existent middle element
             assert_eq!(
                 skiplist.find_less_than(&7),
-                Some((&5, &"watermelon".to_string()))
+                Some((&5, &"watermelon".to_string())),
+                "Finding a target less than a non-existent middle element"
             );
 
-            // Finding a target greater than all elements returns the last element
             assert_eq!(
                 skiplist.find_less_than(&20),
-                Some((&12, &"mango".to_string()))
+                Some((&12, &"mango".to_string())),
+                "Finding a target greater than all elements returns the last element"
             );
         }
     }
