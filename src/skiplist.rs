@@ -428,6 +428,30 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             current_node.value.as_ref().unwrap(),
         ))
     }
+
+    /// Return a reference to the key and value of the first node with a key that is greater than
+    /// or equal to the target key.
+    pub fn find_greater_or_equal(&self, target: &K) -> Option<(&K, &V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        self.find_greater_or_equal_node(target)
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+    }
+
+    /// Return a reference to the key and value of the last node with a key that is less than the
+    /// target key.
+    pub fn find_less_than(&self, target: &K) -> Option<(&K, &V)> {
+        self.find_less_than_node(target).and_then(|node| {
+            // Only the head node has empty keys and values, so this means the search
+            // stayed on the head node. This can happen if we are searching for a target
+            // with less than all of the keys in the skip list. Return `None` in this case.
+            node.key.as_ref()?;
+
+            Some((node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
+        })
+    }
 }
 
 /// Implementation for keys and values that implement `Clone`
@@ -520,6 +544,73 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Decrement length by 1.
     fn dec_length(&mut self) {
         self.length -= 1;
+    }
+
+    /// Return a reference to the first node with a key that is greater than or equal to the target
+    /// key.
+    fn find_greater_or_equal_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = &*self.head;
+        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
+        // current level. If we skipped past our key, move down a level.
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(target) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.next_at_level(level_idx);
+                    }
+                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                        if level_idx == 0 {
+                            // We are at the bottom of the tower, so this is closest node greater
+                            // than or equal to our target.
+                            return Some(next_node);
+                        }
+
+                        // We found a node greater than or equal to our target. See if this is the
+                        // the first greatest node after our target by breaking and moving one
+                        // level down in the tower.
+                        break;
+                    }
+                }
+            }
+        }
+
+        // This is reached when the target is greater than all of the nodes in the skip list.
+        None
+    }
+
+    /// Return a reference to the last node with a key that is less than the target key.
+    fn find_less_than_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = &*self.head;
+        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
+        // current level. If we skipped past our key, move down a level.
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(target) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.next_at_level(level_idx);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        Some(current_node)
     }
 }
 
@@ -973,5 +1064,89 @@ mod tests {
         let skiplist = SkipList::<i32, String>::new(None);
 
         assert_eq!(skiplist.last(), None);
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_find_greater_or_equal_returns_correct_responses() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+        skiplist.insert(11, "grapefruit".to_string());
+        skiplist.insert(12, "mango".to_string());
+
+        assert_eq!(
+            skiplist.find_greater_or_equal(&1),
+            Some((&1, &"apple".to_string())),
+            "The target is the first element so it should be found"
+        );
+
+        assert_eq!(
+            skiplist.find_greater_or_equal(&3),
+            Some((&3, &"orange".to_string())),
+            "The middle element exists so it should be found"
+        );
+
+        assert_eq!(
+            skiplist.find_greater_or_equal(&7),
+            Some((&11, &"grapefruit".to_string())),
+            "The target does not exist but there is a greater node so it should return that node"
+        );
+
+        assert_eq!(
+            skiplist.find_greater_or_equal(&12),
+            Some((&12, &"mango".to_string())),
+            "THe last element exists so it should be found"
+        );
+
+        assert_eq!(
+            skiplist.find_greater_or_equal(&20),
+            None,
+            "The target is greater than every element in the list so `None` should be returned"
+        );
+    }
+
+    #[test]
+    fn with_a_non_empty_skiplist_find_less_than_returns_correct_responses() {
+        let mut skiplist = SkipList::<i32, String>::new(None);
+        skiplist.insert(2, "banana".to_string());
+        skiplist.insert(3, "orange".to_string());
+        skiplist.insert(1, "apple".to_string());
+        skiplist.insert(4, "strawberry".to_string());
+        skiplist.insert(5, "watermelon".to_string());
+        skiplist.insert(11, "grapefruit".to_string());
+        skiplist.insert(12, "mango".to_string());
+
+        assert_eq!(
+            skiplist.find_less_than(&0),
+            None,
+            "Finding a target less than every element in the list returns `None`"
+        );
+
+        assert_eq!(
+            skiplist.find_less_than(&1),
+            None,
+            "Finding a target less than the first element returns `None`"
+        );
+
+        assert_eq!(
+            skiplist.find_less_than(&3),
+            Some((&2, &"banana".to_string())),
+            "Finding a target less than an existing middle element"
+        );
+
+        assert_eq!(
+            skiplist.find_less_than(&7),
+            Some((&5, &"watermelon".to_string())),
+            "Finding a target less than a non-existent middle element"
+        );
+
+        assert_eq!(
+            skiplist.find_less_than(&20),
+            Some((&12, &"mango".to_string())),
+            "Finding a target greater than all elements returns the last element"
+        );
     }
 }
