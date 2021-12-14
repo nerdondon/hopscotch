@@ -7,7 +7,7 @@ on:
 
 jobs:
   tests:
-    name: Run tests
+    name: Run tests for all features
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -21,7 +21,7 @@ jobs:
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
-          command: test
+          command: test --all-features -- --nocapture
 
   fmt:
     name: rustfmt
@@ -57,7 +57,7 @@ jobs:
           args: -- -D warnings
 
   build-release:
-    name: Build release profile
+    name: Build release profile with all features enabled
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -67,4 +67,4 @@ jobs:
           toolchain: nightly
           override: true
       - uses: Swatinem/rust-cache@v1
-      - run: cargo build --release
+      - run: cargo build --release --all-features
