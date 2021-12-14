@@ -9,6 +9,7 @@ use std::ptr::NonNull;
 
 type Link<K, V> = Option<NonNull<SkipNode<K, V>>>;
 
+// A node in the skip list.
 #[derive(Debug)]
 struct SkipNode<K: Ord + Hash + Debug, V: Clone> {
     /// The key should only be `None` for the `head` node.
@@ -116,45 +117,8 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
             return None;
         }
 
-        let mut current_node = &*self.head;
-
-        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
-        // current level. If we skipped past our key, move down a level.
-        for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
-
-            while maybe_next_node.is_some() {
-                let next_node_ptr = maybe_next_node.unwrap();
-                let next_node = unsafe {
-                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
-                    next_node_ptr.as_ref()
-                };
-                match next_node.key.as_ref().unwrap().cmp(key) {
-                    std::cmp::Ordering::Less => {
-                        current_node = next_node;
-                        maybe_next_node = next_node.levels[level_idx].as_ref();
-                    }
-                    _ => break,
-                }
-            }
-        }
-
-        // The while loop uses a less than comparator and stops at the node that is potentially just
-        // prior to the node we are looking for. We need to move the pointer forward one time and
-        // check we actually arrived at our node or if we hit the end of the levels without finding
-        // anything.
-        let potential_record = current_node.levels[0].as_ref();
-        if potential_record.is_some() {
-            let record = unsafe {
-                /*
-                SAFETY:
-                The `is_some` check ensures that the pointer exists and globally all links are
-                guaranteed to be valid.
-                */
-                potential_record.as_ref().unwrap().as_ref()
-            };
-
+        let potential_record = self.find_greater_or_equal_node(key);
+        if let Some(record) = potential_record {
             if record.key.as_ref().unwrap().eq(key) {
                 return record.value.as_ref();
             }
