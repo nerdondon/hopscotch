@@ -137,9 +137,9 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     ///
     /// # Examples
     /// ```
-    /// use nerdondon_hopscotch::skiplist::ConcurrentSkiplist;
+    /// use nerdondon_hopscotch::concurrent_skiplist::ConcurrentSkipList;
     ///
-    /// let skiplist = SkipList::<i32, String>::new(None);
+    /// let skiplist = ConcurrentSkipList::<i32, String>::new(None);
     /// ```
     pub fn new(probability: Option<f64>) -> Self {
         let mut head = Box::new(SkipNode::head());
@@ -186,12 +186,15 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     ///
     /// # Examples
     /// ```
-    /// use nerdondon_hopscotch::skiplist::ConcurrentSkiplist;
+    /// use nerdondon_hopscotch::concurrent_skiplist::ConcurrentSkipList;
     ///
-    /// let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
-    /// skiplist.insert(2, "banana".to_string());
-    /// skiplist.insert(3, "orange".to_string());
-    /// skiplist.insert(1, "apple".to_string());
+    /// let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+    /// // SAFETY: Single thread insert
+    /// unsafe {
+    ///     skiplist.insert(2, "banana".to_string());
+    ///     skiplist.insert(3, "orange".to_string());
+    ///     skiplist.insert(1, "apple".to_string());
+    /// }
     ///
     /// let some_value = skiplist.get(&2).unwrap();
     /// assert_eq!(some_value, "banana");
@@ -382,12 +385,15 @@ where
     ///
     /// # Examples
     /// ```
-    /// use nerdondon_hopscotch::skiplist::ConcurrentSkiplist;
+    /// use nerdondon_hopscotch::concurrent_skiplist::ConcurrentSkipList;
     ///
-    /// let skiplist = ConcurrentSkiplist::<i32, String>::new(None);
-    /// skiplist.insert(2, "banana".to_string());
-    /// skiplist.insert(3, "orange".to_string());
-    /// skiplist.insert(1, "apple".to_string());
+    /// let skiplist = ConcurrentSkipList::<i32, String>::new(None);
+    /// // SAFETY: Single thread insert
+    /// unsafe {
+    ///     skiplist.insert(2, "banana".to_string());
+    ///     skiplist.insert(3, "orange".to_string());
+    ///     skiplist.insert(1, "apple".to_string());
+    /// }
     ///
     /// let entries = skiplist.entries();
     /// assert_eq!(
