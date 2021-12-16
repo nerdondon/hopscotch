@@ -397,31 +397,15 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the key and value of the first node in the skip list if there is a
     /// node. Otherwise, it returns `None`.
     pub fn first(&self) -> Option<(&K, &V)> {
-        self.head()
-            .next()
+        self.first_node()
             .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
     }
 
     /// Return a reference to the key and value of the last node in the skip list if there is a
     /// node. Otherwise, it returns `None`.
     pub fn last(&self) -> Option<(&K, &V)> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut current_node = self.head();
-        for level_idx in (0..self.height()).rev() {
-            let mut maybe_next_node = current_node.next_at_level(level_idx);
-            while let Some(next_node) = maybe_next_node {
-                current_node = next_node;
-                maybe_next_node = next_node.next_at_level(level_idx);
-            }
-        }
-
-        Some((
-            current_node.key.as_ref().unwrap(),
-            current_node.value.as_ref().unwrap(),
-        ))
+        self.last_node()
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
     }
 
     /// Return a reference to the first node in the skip list if there is a node. Otherwise, it
