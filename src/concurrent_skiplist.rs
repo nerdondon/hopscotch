@@ -327,6 +327,73 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
         })
     }
 
+    /// Return a reference to the last node with a key that is less than the target key.
+    pub fn find_less_than_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = self.head();
+        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
+        // current level. If we skipped past our key, move down a level.
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(target) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.next_at_level(level_idx);
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        Some(current_node)
+    }
+
+    /// Return a reference to the first node with a key that is greater than or equal to the target
+    /// key.
+    pub fn find_greater_or_equal_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = self.head();
+        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
+        // current level. If we skipped past our key, move down a level.
+        for level_idx in (0..self.height()).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(target) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.next_at_level(level_idx);
+                    }
+                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                        if level_idx == 0 {
+                            // We are at the bottom of the tower, so this is closest node greater
+                            // than or equal to our target.
+                            return Some(next_node);
+                        }
+
+                        // We found a node greater than or equal to our target. See if this is the
+                        // the first greatest node after our target by breaking and moving one
+                        // level down in the tower.
+                        break;
+                    }
+                }
+            }
+        }
+
+        // This is reached when the target is greater than all of the nodes in the skip list.
+        None
+    }
+
     /// Return a reference to the key and value of the first node in the skip list if there is a
     /// node. Otherwise, it returns `None`.
     pub fn first(&self) -> Option<(&K, &V)> {
@@ -491,73 +558,6 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Increment length by 1.
     fn inc_length(&self) {
         self.length.fetch_add(1, atomic::Ordering::AcqRel);
-    }
-
-    /// Return a reference to the last node with a key that is less than the target key.
-    fn find_less_than_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut current_node = self.head();
-        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
-        // current level. If we skipped past our key, move down a level.
-        for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = current_node.next_at_level(level_idx);
-
-            while let Some(next_node) = maybe_next_node {
-                match next_node.key.as_ref().unwrap().cmp(target) {
-                    std::cmp::Ordering::Less => {
-                        current_node = next_node;
-                        maybe_next_node = next_node.next_at_level(level_idx);
-                    }
-                    _ => break,
-                }
-            }
-        }
-
-        Some(current_node)
-    }
-
-    /// Return a reference to the first node with a key that is greater than or equal to the target
-    /// key.
-    fn find_greater_or_equal_node(&self, target: &K) -> Option<&SkipNode<K, V>> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut current_node = self.head();
-        // Start iteration at the top of the skip list "towers" and iterate through pointers at the
-        // current level. If we skipped past our key, move down a level.
-        for level_idx in (0..self.height()).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = current_node.next_at_level(level_idx);
-
-            while let Some(next_node) = maybe_next_node {
-                match next_node.key.as_ref().unwrap().cmp(target) {
-                    std::cmp::Ordering::Less => {
-                        current_node = next_node;
-                        maybe_next_node = next_node.next_at_level(level_idx);
-                    }
-                    std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
-                        if level_idx == 0 {
-                            // We are at the bottom of the tower, so this is closest node greater
-                            // than or equal to our target.
-                            return Some(next_node);
-                        }
-
-                        // We found a node greater than or equal to our target. See if this is the
-                        // the first greatest node after our target by breaking and moving one
-                        // level down in the tower.
-                        break;
-                    }
-                }
-            }
-        }
-
-        // This is reached when the target is greater than all of the nodes in the skip list.
-        None
     }
 }
 
