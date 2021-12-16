@@ -13,12 +13,28 @@ type Link<K, V> = Option<Arc<AtomicPtr<SkipNode<K, V>>>>;
 
 /// A node in the skip list.
 #[derive(Debug)]
-struct SkipNode<K: Ord + Debug, V: Clone> {
+pub struct SkipNode<K: Ord + Debug, V: Clone> {
     /// The key should only be `None` for the `head` node.
     key: Option<K>,
     /// The Value should only be `None` for the `head` node.
     value: Option<V>,
     levels: Vec<Link<K, V>>,
+}
+
+/// Public methods
+impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
+    /// Get an immutable reference to the next node at level 0 if it exists. Otherwise, `None`.
+    pub fn next(&self) -> Option<&SkipNode<K, V>> {
+        self.next_at_level(0)
+    }
+
+    /// Get the key and value stored on this node.
+    ///
+    /// This should always return a key-value pair because the head node is the only node that does
+    /// not have a key or a value.
+    pub fn get_entry(&self) -> (&K, &V) {
+        (self.key.as_ref().unwrap(), self.value.as_ref().unwrap())
+    }
 }
 
 /// Private methods
@@ -37,11 +53,6 @@ impl<K: Ord + Debug, V: Clone> SkipNode<K, V> {
             value: None,
             levels: vec![],
         }
-    }
-
-    /// Get an immutable reference to the next node at level 0 if it exists. Otherwise, `None`.
-    fn next(&self) -> Option<&SkipNode<K, V>> {
-        self.next_at_level(0)
     }
 
     /// Get an immutable reference to the next node at the specified level if it exists.
