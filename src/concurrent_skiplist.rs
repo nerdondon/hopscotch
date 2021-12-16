@@ -128,7 +128,7 @@ pub struct ConcurrentSkipList<K: Ord + Debug, V: Clone> {
     approximate_mem_usage: AtomicUsize,
 }
 
-// Public methods of SkipList
+/// Public methods
 impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Create a new skip list.
     ///
@@ -425,7 +425,7 @@ where
     }
 }
 
-// Private methods of SkipList
+/// Private methods
 impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the head node.
     fn head(&self) -> &SkipNode<K, V> {

@@ -79,7 +79,7 @@ pub struct SkipList<K: Ord + Hash + Debug, V: Clone> {
     approximate_mem_usage: usize,
 }
 
-// Public methods of SkipList
+/// Public methods of SkipList
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// Create a new skip list.
     ///
@@ -465,7 +465,7 @@ where
     }
 }
 
-// Private methods of SkipList
+/// Private methods of SkipList
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// The current maximum height of the skip list.
     fn height(&self) -> usize {
