@@ -424,6 +424,31 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
         ))
     }
 
+    /// Return a reference to the first node in the skip list if there is a node. Otherwise, it
+    /// returns `None`.
+    pub fn first_node(&self) -> Option<&SkipNode<K, V>> {
+        self.head().next()
+    }
+
+    /// Return a reference to the last node in the skip list if there is a node. Otherwise, it
+    /// returns `None`.
+    pub fn last_node(&self) -> Option<&SkipNode<K, V>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut current_node = self.head();
+        for level_idx in (0..self.height()).rev() {
+            let mut maybe_next_node = current_node.next_at_level(level_idx);
+            while let Some(next_node) = maybe_next_node {
+                current_node = next_node;
+                maybe_next_node = next_node.next_at_level(level_idx);
+            }
+        }
+
+        Some(current_node)
+    }
+
     /// The number of elements in the skip list.
     pub fn len(&self) -> usize {
         self.length.load(atomic::Ordering::Acquire)
