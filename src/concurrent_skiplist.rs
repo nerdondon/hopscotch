@@ -317,14 +317,8 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the key and value of the last node with a key that is less than the
     /// target key.
     pub fn find_less_than(&self, target: &K) -> Option<(&K, &V)> {
-        self.find_less_than_node(target).and_then(|node| {
-            // Only the head node has empty keys and values, so this means the search
-            // stayed on the head node. This can happen if we are searching for a target
-            // with less than all of the keys in the skip list. Return `None` in this case.
-            node.key.as_ref()?;
-
-            Some((node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
-        })
+        self.find_less_than_node(target)
+            .and_then(|node| Some((node.key.as_ref().unwrap(), node.value.as_ref().unwrap())))
     }
 
     /// Return a reference to the last node with a key that is less than the target key.
@@ -350,6 +344,11 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
                 }
             }
         }
+
+        // Only the head node has empty keys and values, so this means the search
+        // stayed on the head node. This can happen if we are searching for a target
+        // with less than all of the keys in the skip list. Return `None` in this case.
+        current_node.key.as_ref()?;
 
         Some(current_node)
     }
