@@ -306,10 +306,6 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the key and value of the first node with a key that is greater than
     /// or equal to the target key.
     pub fn find_greater_or_equal(&self, target: &K) -> Option<(&K, &V)> {
-        if self.is_empty() {
-            return None;
-        }
-
         self.find_greater_or_equal_node(target)
             .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
     }
