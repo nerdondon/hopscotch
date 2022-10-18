@@ -9,6 +9,8 @@ use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
 use std::sync::Arc;
 
+use crate::Sizeable;
+
 type Link<K, V> = Option<Arc<AtomicPtr<SkipNode<K, V>>>>;
 
 /// A node in the skip list.
@@ -211,96 +213,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// assert_eq!(some_value, "banana");
     /// ```
     pub unsafe fn insert(&self, key: K, value: V) {
-        let new_node_height = self.random_height();
-        if new_node_height > self.height() {
-            self.adjust_head(new_node_height);
-        }
-
-        // Track where we end on each level
-        let mut nodes_to_update: Vec<Option<*mut SkipNode<K, V>>> = vec![None; self.height()];
-        let list_height = self.height();
-        let mut current_node_ptr: *mut _ = self.head_mut();
-
-        // Start iteration at the top of the skip list "towers" and find the insert position at each
-        // level
-        for level_idx in (0..list_height).rev() {
-            // Get an optional of the next node
-            // SAFETY: It is safe to dereference the raw pointer because we have a lock
-            let mut maybe_next_node = (*current_node_ptr).next_at_level_mut(level_idx);
-
-            while let Some(next_node) = maybe_next_node {
-                match next_node.key.as_ref().unwrap().cmp(&key) {
-                    std::cmp::Ordering::Less => {
-                        current_node_ptr = next_node;
-                        maybe_next_node = next_node.next_at_level_mut(level_idx);
-                    }
-                    _ => break,
-                }
-            }
-
-            // Keep track of the node we stopped at. This is either the node right before our new
-            // node or head node of the level if no lesser node was found.
-            //
-            // We are effectively giving out multiple mutable pointers right here. This seems ok
-            // since we are the only writer (it is part of the contract that callers have
-            // a lock). The bottom loop also ensures that only one cast of a potentially duplicate
-            // pointer is active at a time. Explicitly, two mutable pointers that point to the same
-            // memory location are never casted to mutable references at the same time.
-            nodes_to_update[level_idx] = Some(current_node_ptr);
-        }
-
-        let mut new_node = Box::new(SkipNode::new(key, value, new_node_height));
-        let new_node_ptr = new_node.as_mut() as *mut SkipNode<K, V>;
-        for level_idx in (0..new_node_height).rev() {
-            /*
-            SAFETY:
-            Dereferencing the *mut is ok here because we have exclusive access to modifying the
-            node pointers and we casted into a *mut above. The node we casted is from a pointer
-            that we got via an acquire load which also ensure validity.
-            */
-            let previous_node = &mut **(nodes_to_update[level_idx].as_mut().unwrap());
-
-            // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
-            // node at this level becomes `new_node`'s next node at this level
-            new_node.levels[level_idx] =
-                previous_node.levels[level_idx]
-                    .as_ref()
-                    .map(|next_node_atomic_ptr| {
-                        let underlying_ptr = next_node_atomic_ptr.load(atomic::Ordering::Acquire);
-                        Arc::new(AtomicPtr::from(underlying_ptr))
-                    });
-
-            // Set the next pointer of the previous node to the new node
-            match previous_node.levels[level_idx].as_ref() {
-                Some(prev_node_next_ptr) => {
-                    // If there was an existing pointer at this level, atomically replace the
-                    // pointer
-                    prev_node_next_ptr.store(new_node_ptr, atomic::Ordering::Release);
-                }
-                None => {
-                    // There was not an existing pointer at this level
-                    previous_node.levels[level_idx] = Some(Arc::new(AtomicPtr::new(new_node_ptr)));
-                }
-            }
-        }
-
-        // Book keeping for size
-        // The additional usage should be from the size of the new node and the size of references
-        // to this new node. This is multiplied by 2 to approximate the storage in the `levels`
-        // vector. `mem::size_of` and `mem::size_of_val` does not actually get the size of vectors
-        // since vectors are allocated to the heap and only a pointer is stored in the field.
-        self.approximate_mem_usage.fetch_add(
-            mem::size_of::<SkipNode<K, V>>() + (2 * mem::size_of::<Link<K, V>>() * new_node_height),
-            atomic::Ordering::AcqRel,
-        );
-        self.inc_length();
-
-        /*
-        `Box::leak` is called so that the node does not get deallocated at the end of the function.
-        The `SkipList::remove` method will ensure to reform the box from the pointer so that the
-        node is de-allocated on removal.
-        */
-        Box::leak(new_node);
+        self.insert_internal(key, value, None);
     }
 
     /// Return a reference to the key and value of the first node with a key that is greater than
@@ -439,6 +352,9 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     }
 
     /// Get the approximate amount of memory used in number of bytes.
+    ///
+    /// This value is not accurate unless used with keys and values that implement `[Sizeable]` and
+    /// using the `ConcurrrentSkipList::insert_with_size` method.
     pub fn get_approx_mem_usage(&self) -> usize {
         self.approximate_mem_usage.load(atomic::Ordering::Acquire)
     }
@@ -507,6 +423,24 @@ where
     }
 }
 
+/// Implementation for keys and values that implement `Sizeable`
+impl<K: Ord + Debug + Sizeable, V: Clone + Sizeable> ConcurrentSkipList<K, V> {
+    /// Insert a key-value pair that is [`Sizeable`].
+    ///
+    /// # Duplication
+    ///
+    /// This method is required to be named differently because Rust does not support
+    /// specialization of generic implementations yet.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have an external lock on this skiplist in order to safely call this method.
+    pub unsafe fn insert_with_size(&self, key: K, value: V) {
+        let approx_kv_size = key.get_approx_size() + value.get_approx_size();
+        self.insert_internal(key, value, Some(approx_kv_size));
+    }
+}
+
 /// Private methods
 impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// Return a reference to the head node.
@@ -545,6 +479,101 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
         } else {
             sample as usize
         }
+    }
+
+    /// Insert key-value with and optional approximated size of the key-value pair.
+    unsafe fn insert_internal(&self, key: K, value: V, maybe_kv_size_bytes: Option<usize>) {
+        let new_node_height = self.random_height();
+        if new_node_height > self.height() {
+            self.adjust_head(new_node_height);
+        }
+
+        // Track where we end on each level
+        let mut nodes_to_update: Vec<Option<*mut SkipNode<K, V>>> = vec![None; self.height()];
+        let list_height = self.height();
+        let mut current_node_ptr: *mut _ = self.head_mut();
+
+        // Start iteration at the top of the skip list "towers" and find the insert position at each
+        // level
+        for level_idx in (0..list_height).rev() {
+            // Get an optional of the next node
+            // SAFETY: It is safe to dereference the raw pointer because we have a lock
+            let mut maybe_next_node = (*current_node_ptr).next_at_level_mut(level_idx);
+
+            while let Some(next_node) = maybe_next_node {
+                match next_node.key.as_ref().unwrap().cmp(&key) {
+                    std::cmp::Ordering::Less => {
+                        current_node_ptr = next_node;
+                        maybe_next_node = next_node.next_at_level_mut(level_idx);
+                    }
+                    _ => break,
+                }
+            }
+
+            // Keep track of the node we stopped at. This is either the node right before our new
+            // node or head node of the level if no lesser node was found.
+            //
+            // We are effectively giving out multiple mutable pointers right here. This seems ok
+            // since we are the only writer (it is part of the contract that callers have
+            // a lock). The bottom loop also ensures that only one cast of a potentially duplicate
+            // pointer is active at a time. Explicitly, two mutable pointers that point to the same
+            // memory location are never casted to mutable references at the same time.
+            nodes_to_update[level_idx] = Some(current_node_ptr);
+        }
+
+        let mut new_node = Box::new(SkipNode::new(key, value, new_node_height));
+        let new_node_ptr = new_node.as_mut() as *mut SkipNode<K, V>;
+        for level_idx in (0..new_node_height).rev() {
+            /*
+            SAFETY:
+            Dereferencing the *mut is ok here because we have exclusive access to modifying the
+            node pointers and we casted into a *mut above. The node we casted is from a pointer
+            that we got via an acquire load which also ensure validity.
+            */
+            let previous_node = &mut **(nodes_to_update[level_idx].as_mut().unwrap());
+
+            // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
+            // node at this level becomes `new_node`'s next node at this level
+            new_node.levels[level_idx] =
+                previous_node.levels[level_idx]
+                    .as_ref()
+                    .map(|next_node_atomic_ptr| {
+                        let underlying_ptr = next_node_atomic_ptr.load(atomic::Ordering::Acquire);
+                        Arc::new(AtomicPtr::from(underlying_ptr))
+                    });
+
+            // Set the next pointer of the previous node to the new node
+            match previous_node.levels[level_idx].as_ref() {
+                Some(prev_node_next_ptr) => {
+                    // If there was an existing pointer at this level, atomically replace the
+                    // pointer
+                    prev_node_next_ptr.store(new_node_ptr, atomic::Ordering::Release);
+                }
+                None => {
+                    // There was not an existing pointer at this level
+                    previous_node.levels[level_idx] = Some(Arc::new(AtomicPtr::new(new_node_ptr)));
+                }
+            }
+        }
+
+        // Book keeping for size
+        // The additional usage should be from the size of the new node and the size of references
+        // to this new node. This is multiplied by 2 to approximate the storage in the `levels`
+        // vector. `mem::size_of` and `mem::size_of_val` does not actually get the size of vectors
+        // since vectors are allocated to the heap and only a pointer is stored in the field.
+        let approx_usage = mem::size_of::<SkipNode<K, V>>()
+            + (2 * mem::size_of::<Link<K, V>>() * new_node_height)
+            + maybe_kv_size_bytes.unwrap_or(0);
+        self.approximate_mem_usage
+            .fetch_add(approx_usage, atomic::Ordering::AcqRel);
+        self.inc_length();
+
+        /*
+        `Box::leak` is called so that the node does not get deallocated at the end of the function.
+        The `SkipList::remove` method will ensure to reform the box from the pointer so that the
+        node is de-allocated on removal.
+        */
+        Box::leak(new_node);
     }
 
     /// Adjust the levels stored in head to match a new height.
@@ -882,21 +911,49 @@ mod tests {
 
             // Approximate node size
             // size of `levels` actually = height of the skiplist * size of `Link`
-            let base_node_usage: usize = mem::size_of::<SkipNode<u16, String>>();
-            let link_size = mem::size_of::<Link<u16, String>>();
+            let base_node_usage: usize = mem::size_of::<SkipNode<u16, Vec<u8>>>();
+            let link_size = mem::size_of::<Link<u16, Vec<u8>>>();
 
             let mut usage_approximation = approx_initial_usage;
 
-            let skiplist = ConcurrentSkipList::<u16, String>::new(None);
+            let skiplist = ConcurrentSkipList::<u16, Vec<u8>>::new(None);
             assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
 
-            skiplist.insert(1, "apple".to_string());
-            usage_approximation += base_node_usage + 7 + skiplist.height() * link_size;
-            assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+            skiplist.insert_with_size(1, "apple".into());
+            usage_approximation += base_node_usage
+                + mem::size_of::<u16>()
+                + "apple".len()
+                + skiplist.height() * link_size;
+            assert!(
+                skiplist.get_approx_mem_usage() > usage_approximation,
+                "Expected the actual memory usage approximation ({}) to be greater than {}",
+                skiplist.get_approx_mem_usage(),
+                usage_approximation
+            );
 
-            skiplist.insert(2, "banana".to_string());
-            usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
-            assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+            skiplist.insert_with_size(2, "banana".into());
+            usage_approximation += base_node_usage
+                + mem::size_of::<u16>()
+                + "banana".len()
+                + skiplist.height() * link_size;
+            assert!(
+                skiplist.get_approx_mem_usage() > usage_approximation,
+                "Expected the actual memory usage approximation ({}) to be greater than {}",
+                skiplist.get_approx_mem_usage(),
+                usage_approximation
+            );
+
+            skiplist.insert_with_size(3, [b'c'; 3000].to_vec());
+            usage_approximation += base_node_usage
+                + mem::size_of::<u16>()
+                + mem::size_of_val(&[b'c'; 3000])
+                + skiplist.height() * link_size;
+            assert!(
+                skiplist.get_approx_mem_usage() > usage_approximation,
+                "Expected the actual memory usage approximation ({}) to be greater than {}",
+                skiplist.get_approx_mem_usage(),
+                usage_approximation
+            );
         }
     }
 

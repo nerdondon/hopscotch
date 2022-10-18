@@ -7,6 +7,8 @@ use std::iter::FusedIterator;
 use std::mem;
 use std::ptr::NonNull;
 
+use crate::Sizeable;
+
 type Link<K, V> = Option<NonNull<SkipNode<K, V>>>;
 
 // A node in the skip list.
@@ -17,14 +19,17 @@ struct SkipNode<K: Ord + Hash + Debug, V: Clone> {
     /// The Value should only be `None` for the `head` node.
     value: Option<V>,
     levels: Vec<Link<K, V>>,
+    /// The size of the key and value in bytes.
+    kv_size: usize,
 }
 
 impl<K: Ord + Hash + Debug, V: Clone> SkipNode<K, V> {
-    fn new(key: K, value: V, height: usize) -> Self {
+    fn new(key: K, value: V, height: usize, kv_size_bytes: usize) -> Self {
         SkipNode {
             key: Some(key),
             value: Some(value),
             levels: vec![None; height],
+            kv_size: kv_size_bytes,
         }
     }
 
@@ -33,6 +38,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipNode<K, V> {
             key: None,
             value: None,
             levels: vec![],
+            kv_size: mem::size_of::<Option<K>>() + mem::size_of::<Option<V>>(),
         }
     }
 
@@ -142,82 +148,7 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// assert_eq!(some_value, "banana");
     /// ```
     pub fn insert(&mut self, key: K, value: V) {
-        let new_node_height = self.random_height();
-        if new_node_height > self.height() {
-            self.adjust_head(new_node_height);
-        }
-
-        // Track where we end on each level
-        let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
-        let list_height = self.height();
-        let mut current_node = self.head.as_ref();
-
-        // Start iteration at the top of the skip list "towers" and find the insert position at each
-        // level
-        for level_idx in (0..list_height).rev() {
-            // Get an optional of the next node
-            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
-
-            while maybe_next_node.is_some() {
-                let next_node_ptr = maybe_next_node.unwrap();
-                let next_node = unsafe {
-                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
-                    next_node_ptr.as_ref()
-                };
-                match next_node.key.as_ref().unwrap().cmp(&key) {
-                    std::cmp::Ordering::Less => {
-                        current_node = next_node;
-                        maybe_next_node = next_node.levels[level_idx].as_ref();
-                    }
-                    _ => break,
-                }
-            }
-
-            // Keep track of the node we stopped at. This is either the node right before our new
-            // node or head node of the level if no lesser node was found.
-            nodes_to_update[level_idx] = Some(current_node.into());
-        }
-
-        let mut new_node = Box::new(SkipNode::new(key, value, new_node_height));
-        /*
-        `.unwrap` is called explicity after the `NonNull::new` because `None` is produced on
-        failure and we want to be explicit about the existence of the value stored in the
-        levels vector.
-        */
-        let new_node_ptr = NonNull::new(new_node.as_mut()).unwrap();
-        for level_idx in (0..new_node_height).rev() {
-            let previous_node = unsafe {
-                /*
-                SAFETY:
-                `nodes_to_update` is populated above with `current_node`, which is checked for
-                existence.
-                */
-                nodes_to_update[level_idx].as_mut().unwrap().as_mut()
-            };
-
-            // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
-            // node at this level becomes `new_node`'s next node at this level
-            new_node.levels[level_idx] = previous_node.levels[level_idx].take();
-
-            // Set the next pointer of the previous node to the new node
-            previous_node.levels[level_idx] = Some(new_node_ptr);
-        }
-
-        // Book keeping for size
-        // The additional usage should be from the size of the new node and the size of references
-        // to this new node. This is multiplied by 2 to approximate the storage in the `levels`
-        // vector. `mem::size_of` and `mem::size_of_val` does not actually get the size of vectors
-        // since vectors are allocated to the heap and only a pointer is stored in the field.
-        self.approximate_mem_usage +=
-            mem::size_of::<SkipNode<K, V>>() + (2 * mem::size_of::<Link<K, V>>() * new_node_height);
-        self.inc_length();
-
-        /*
-        `Box::leak` is called so that the node does not get deallocated at the end of the function.
-        The `SkipList::remove` method will ensure to reform the box from the pointer so that the
-        node is de-allocated on removal.
-        */
-        Box::leak(new_node);
+        self.insert_internal(key, value, None)
     }
 
     /// Remove a key-value pair.
@@ -298,7 +229,8 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         // Book keeping for size
         // See [`Skiplist::insert`] for reasoning behind the approximate usage removed.
         self.approximate_mem_usage -= mem::size_of::<SkipNode<K, V>>()
-            + (2 * mem::size_of::<Link<K, V>>() * num_nodes_adjusted);
+            + (2 * mem::size_of::<Link<K, V>>() * num_nodes_adjusted)
+            + found_node.kv_size;
         self.dec_length();
 
         // Re-box the allocation the pointer represents so that it can get dropped.
@@ -327,6 +259,9 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     }
 
     /// Get the approximate amount of memory used in number of bytes.
+    ///
+    /// This value is not accurate unless used with keys and values that implement `[Sizeable]` and
+    /// using the `ConcurrrentSkipList::insert_with_size` method.
     pub fn get_approx_mem_usage(&self) -> usize {
         self.approximate_mem_usage
     }
@@ -465,6 +400,24 @@ where
     }
 }
 
+/// Implementation for keys and values that implement `Sizeable`
+impl<K, V> SkipList<K, V>
+where
+    K: Ord + Hash + Debug + Clone + Sizeable,
+    V: Clone + Sizeable,
+{
+    /// Insert a key-value pair that is [`Sizeable`].
+    ///
+    /// # Duplication
+    ///
+    /// This method is required to be named differently because Rust does not support
+    /// specialization of generic implementations yet.
+    pub fn insert_with_size(&mut self, key: K, value: V) {
+        let approx_kv_size = key.get_approx_size() + value.get_approx_size();
+        self.insert_internal(key, value, Some(approx_kv_size));
+    }
+}
+
 /// Private methods of SkipList
 impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
     /// The current maximum height of the skip list.
@@ -486,6 +439,92 @@ impl<K: Ord + Hash + Debug, V: Clone> SkipList<K, V> {
         } else {
             sample as usize
         }
+    }
+
+    /// Insert key-value with and optional approximated size of the key-value pair.
+    fn insert_internal(&mut self, key: K, value: V, maybe_kv_size_bytes: Option<usize>) {
+        let new_node_height = self.random_height();
+        if new_node_height > self.height() {
+            self.adjust_head(new_node_height);
+        }
+
+        // Track where we end on each level
+        let mut nodes_to_update: Vec<Option<NonNull<SkipNode<K, V>>>> = vec![None; self.height()];
+        let list_height = self.height();
+        let mut current_node = self.head.as_ref();
+
+        // Start iteration at the top of the skip list "towers" and find the insert position at each
+        // level
+        for level_idx in (0..list_height).rev() {
+            // Get an optional of the next node
+            let mut maybe_next_node = current_node.levels[level_idx].as_ref();
+
+            while maybe_next_node.is_some() {
+                let next_node_ptr = maybe_next_node.unwrap();
+                let next_node = unsafe {
+                    // SAFETY: next_node_ptr is guaranteed to exist by the condition for the `while`
+                    next_node_ptr.as_ref()
+                };
+                match next_node.key.as_ref().unwrap().cmp(&key) {
+                    std::cmp::Ordering::Less => {
+                        current_node = next_node;
+                        maybe_next_node = next_node.levels[level_idx].as_ref();
+                    }
+                    _ => break,
+                }
+            }
+
+            // Keep track of the node we stopped at. This is either the node right before our new
+            // node or head node of the level if no lesser node was found.
+            nodes_to_update[level_idx] = Some(current_node.into());
+        }
+
+        let mut new_node = Box::new(SkipNode::new(
+            key,
+            value,
+            new_node_height,
+            maybe_kv_size_bytes.unwrap_or(0),
+        ));
+        /*
+        `.unwrap` is called explicity after the `NonNull::new` because `None` is produced on
+        failure and we want to be explicit about the existence of the value stored in the
+        levels vector.
+        */
+        let new_node_ptr = NonNull::new(new_node.as_mut()).unwrap();
+        for level_idx in (0..new_node_height).rev() {
+            let previous_node = unsafe {
+                /*
+                SAFETY:
+                `nodes_to_update` is populated above with `current_node`, which is checked for
+                existence.
+                */
+                nodes_to_update[level_idx].as_mut().unwrap().as_mut()
+            };
+
+            // Set the new node's next pointer for this level. Specifically, `previous_node`'s next
+            // node at this level becomes `new_node`'s next node at this level
+            new_node.levels[level_idx] = previous_node.levels[level_idx].take();
+
+            // Set the next pointer of the previous node to the new node
+            previous_node.levels[level_idx] = Some(new_node_ptr);
+        }
+
+        // Book keeping for size
+        // The additional usage should be from the size of the new node and the size of references
+        // to this new node. This is multiplied by 2 to approximate the storage in the `levels`
+        // vector. `mem::size_of` and `mem::size_of_val` does not actually get the size of vectors
+        // since vectors are allocated to the heap and only a pointer is stored in the field.
+        self.approximate_mem_usage += mem::size_of::<SkipNode<K, V>>()
+            + (2 * mem::size_of::<Link<K, V>>() * new_node_height)
+            + maybe_kv_size_bytes.unwrap_or(0);
+        self.inc_length();
+
+        /*
+        `Box::leak` is called so that the node does not get deallocated at the end of the function.
+        The `SkipList::remove` method will ensure to reform the box from the pointer so that the
+        node is de-allocated on removal.
+        */
+        Box::leak(new_node);
     }
 
     /// Adjust the levels stored in head to match a new height.
@@ -967,29 +1006,81 @@ mod tests {
 
         // Approximate node size
         // size of `levels` actually = height of the skiplist * size of `Link`
-        let base_node_usage: usize = mem::size_of::<SkipNode<u16, String>>();
-        let link_size = mem::size_of::<Link<u16, String>>();
+        let base_node_usage: usize = mem::size_of::<SkipNode<u16, Vec<u8>>>();
+        let link_size = mem::size_of::<Link<u16, Vec<u8>>>();
 
         let mut usage_approximation = approx_initial_usage;
 
-        let mut skiplist = SkipList::<u16, String>::new(None);
+        let mut skiplist = SkipList::<u16, Vec<u8>>::new(None);
         assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
 
-        skiplist.insert(1, "apple".to_string());
-        usage_approximation += base_node_usage + 7 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+        skiplist.insert_with_size(1, "apple".into());
+        usage_approximation +=
+            base_node_usage + mem::size_of::<u16>() + "apple".len() + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() > usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
 
-        skiplist.insert(2, "banana".to_string());
-        usage_approximation += base_node_usage + 8 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+        skiplist.insert_with_size(2, "banana".into());
+        usage_approximation += base_node_usage
+            + mem::size_of::<u16>()
+            + "banana".len()
+            + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() > usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
+
+        skiplist.insert_with_size(3, [b'c'; 3000].to_vec());
+        usage_approximation += base_node_usage
+            + mem::size_of::<u16>()
+            + mem::size_of_val(&[b'c'; 3000])
+            + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() > usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
 
         skiplist.remove(&1);
-        usage_approximation -= base_node_usage + 7 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() > usage_approximation);
+        usage_approximation -=
+            base_node_usage + mem::size_of::<u16>() + "apple".len() + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() > usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
 
         skiplist.remove(&2);
-        usage_approximation -= base_node_usage + 8 + skiplist.height() * link_size;
-        assert!(skiplist.get_approx_mem_usage() >= usage_approximation);
+        usage_approximation -= base_node_usage
+            + mem::size_of::<u16>()
+            + "banana".len()
+            + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() >= usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
+
+        skiplist.remove(&3);
+        usage_approximation -= base_node_usage
+            + mem::size_of::<u16>()
+            + mem::size_of_val(&[b'c'; 3000])
+            + skiplist.height() * link_size;
+        assert!(
+            skiplist.get_approx_mem_usage() >= usage_approximation,
+            "Expected the actual memory usage approximation ({}) to be greater than {}",
+            skiplist.get_approx_mem_usage(),
+            usage_approximation
+        );
     }
 
     #[test]
