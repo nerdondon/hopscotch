@@ -314,7 +314,7 @@ impl<K: Ord + Debug, V: Clone> ConcurrentSkipList<K, V> {
     /// target key.
     pub fn find_less_than(&self, target: &K) -> Option<(&K, &V)> {
         self.find_less_than_node(target)
-            .and_then(|node| Some((node.key.as_ref().unwrap(), node.value.as_ref().unwrap())))
+            .map(|node| (node.key.as_ref().unwrap(), node.value.as_ref().unwrap()))
     }
 
     /// Return a reference to the last node with a key that is less than the target key.
@@ -1186,8 +1186,7 @@ mod concurrency_tests {
                 end_of_read_range = self
                     .skiplist
                     .find_greater_or_equal(&start_read_range)
-                    .or(Some((&(NUM_KEYS, 0), &zero_gen)))
-                    .unwrap()
+                    .unwrap_or((&(NUM_KEYS, 0), &zero_gen))
                     .0;
 
                 assert!(
